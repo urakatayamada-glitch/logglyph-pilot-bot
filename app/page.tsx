@@ -4,12 +4,24 @@ import { useState } from "react";
 
 type Message = { role: "user" | "assistant"; content: string };
 
+function makeSessionId() {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
+  return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
 export default function Home() {
+  const [sessionId] = useState(makeSessionId);
   const [messages, setMessages] = useState<Message[]>([
     { role: "assistant", content: "こんにちは。今日は何気ない話を少し聞かせてください。最近、妙に気になったことや、誰かに話すほどでもない出来事はありましたか？" }
   ]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+
+  async function save(role: Message["role"], content: string) {
+    try {
+      await fetch("/api/log", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sessionId, role, content }) });
+    } catch { /* Pilot: chat continues even if logging temporarily fails. */ }
+  }
 
   async function send() {
     const text = input.trim();
@@ -18,10 +30,13 @@ export default function Home() {
     setMessages(next);
     setInput("");
     setLoading(true);
+    void save("user", text);
     try {
       const res = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ messages: next }) });
       const data = await res.json();
-      setMessages([...next, { role: "assistant", content: data.reply ?? "うまく返答できませんでした。もう一度お願いします。" }]);
+      const reply = data.reply ?? "うまく返答できませんでした。もう一度お願いします。";
+      setMessages([...next, { role: "assistant", content: reply }]);
+      void save("assistant", reply);
     } finally { setLoading(false); }
   }
 
