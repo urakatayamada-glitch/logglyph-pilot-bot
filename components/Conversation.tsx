@@ -9,8 +9,21 @@ import type { MemoryTriggerEpisode } from "../lib/episodes";
 import { RECENT_EPISODE_MEMORY } from "../lib/conversation/config";
 
 const LS_SESSION = "logglyph.session";
+const LS_ACCEPTED = "logglyph.accepted";
 const LS_CLIENT = "logglyph.client";
 const LS_RECENT_EPISODES = "logglyph.recentEpisodes";
+
+/**
+ * 会話開始前に一度だけ表示する注意文言。
+ *
+ * Product Owner決定（Wave 0 配布のリスクヘッジ）。
+ * 「はじめる」を押すまでセッションをサーバーに登録しないため、
+ * 読まずに離脱した人が Sessions 件数に混ざらない。
+ */
+const GATE_NOTICE =
+  "会話内容はPilot改善のため運営者が確認する場合があります。" +
+  "名前・会社名・住所など特定につながる情報はなるべく書かないでください。" +
+  "また、話したくないことは話す必要はありません。途中でやめても問題ありません。";
 
 interface PersistedSession {
   sessionId: string;
@@ -58,12 +71,23 @@ export default function Conversation({
   const [oneLineMemory, setOneLineMemory] = useState<string | null>(null);
   const [crisis, setCrisis] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  /**
+   * 注意文言に同意済みか。
+   *
+   * 端末ごとに1回だけ表示する。2回目以降のセッションで毎回挟むと、
+   * 「また話したい」の観測対象である再訪に余計な摩擦が入るため。
+   */
+  const [accepted, setAccepted] = useState(false);
   const startedRef = useRef(false);
 
   /** 初期化：前回の会話があれば復元、なければEpisodeで開始 */
   useEffect(() => {
     const saved = readLS<PersistedSession>(LS_SESSION);
+    if (readLS<boolean>(LS_ACCEPTED) === true) setAccepted(true);
+
     if (saved?.sessionId && saved.messages?.length) {
+      // 進行中の会話が復元できる時点で、すでに同意している
+      setAccepted(true);
       setSessionId(saved.sessionId);
       setMessages(saved.messages);
       setCompleted(saved.completed);
@@ -82,7 +106,8 @@ export default function Conversation({
 
   /** セッションをサーバーに登録（Episodeの記録とレート制限） */
   useEffect(() => {
-    if (!ready || !sessionId || startedRef.current) return;
+    // 同意前はサーバーに何も送らない（レート制限とSessions件数を汚さない）
+    if (!ready || !accepted || !sessionId || startedRef.current) return;
     startedRef.current = true;
 
     let clientToken = readLS<string>(LS_CLIENT);
@@ -117,7 +142,7 @@ export default function Conversation({
       }
       void saveLog(sessionId, "assistant", episode.body, 0);
     })();
-  }, [ready, sessionId, episode]);
+  }, [ready, accepted, sessionId, episode]);
 
   /** 会話状態の永続化（リロード対策） */
   useEffect(() => {
@@ -205,6 +230,11 @@ export default function Conversation({
     [sessionId]
   );
 
+  const accept = useCallback(() => {
+    writeLS(LS_ACCEPTED, true);
+    setAccepted(true);
+  }, []);
+
   const restart = useCallback(() => {
     try {
       localStorage.removeItem(LS_SESSION);
@@ -216,6 +246,17 @@ export default function Conversation({
 
   if (!ready) {
     return <div className="chat" />;
+  }
+
+  if (!accepted) {
+    return (
+      <div className="gate">
+        <p className="gate-text">{GATE_NOTICE}</p>
+        <button className="primary" onClick={accept}>
+          はじめる
+        </button>
+      </div>
+    );
   }
 
   return (

@@ -470,3 +470,22 @@ button.ghost.restart{margin-top:18px}
   .log-row{grid-template-columns:52px 1fr}
   .log-time{display:none}
 }
+
+/* ---------- 開始前の注意文言（Wave 0） ---------- */
+/* 会話画面と同じ余白・行間に合わせ、読ませる面としてだけ成立させる。
+   ボタンまで一画面に収めたいので、文字は本文より一段小さくしている。 */
+.gate{
+  flex:1;
+  display:flex;
+  flex-direction:column;
+  justify-content:center;
+  align-items:flex-start;
+  gap:22px;
+  padding:28px 24px 34px;
+}
+.gate-text{
+  color:var(--ink-soft);
+  font-size:13px;
+  line-height:2;
+  letter-spacing:.01em;
+}
