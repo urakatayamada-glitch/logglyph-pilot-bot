@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 
 // TypeScriptを直接importできないため、判定ロジックをここに写して検証する。
 // lib/conversation/config.ts と同じ値を使うこと。
-const LIMITS = { naturalCloseTarget: 5, wrapUpHint: 8, hardLimit: 10 };
+const LIMITS = { naturalCloseTarget: 4, wrapUpHint: 6, hardLimit: 8 };
 
 function resolvePhase(n) {
   if (n <= 0) return "OPENING";
@@ -25,10 +25,10 @@ function canAiChooseToClose(phase) {
 test("フェーズ判定：境界値", () => {
   assert.equal(resolvePhase(0), "OPENING");
   assert.equal(resolvePhase(1), "EXPLORING");
-  assert.equal(resolvePhase(7), "EXPLORING");
-  assert.equal(resolvePhase(8), "WRAP_UP");
-  assert.equal(resolvePhase(9), "WRAP_UP");
-  assert.equal(resolvePhase(10), "CLOSING");
+  assert.equal(resolvePhase(5), "EXPLORING");
+  assert.equal(resolvePhase(6), "WRAP_UP");
+  assert.equal(resolvePhase(7), "WRAP_UP");
+  assert.equal(resolvePhase(8), "CLOSING");
   assert.equal(resolvePhase(15), "CLOSING");
 });
 
