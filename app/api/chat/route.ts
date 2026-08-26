@@ -1,94 +1,90 @@
-import OpenAI from "openai";
 import { NextResponse } from "next/server";
+import { runTurn } from "../../../lib/conversation/engine";
+import { ChatMessage } from "../../../lib/conversation/phase";
+import { moderate } from "../../../lib/moderation";
+import { getSupabaseAdmin } from "../../../lib/supabase-server";
+import { PROMPT_VERSION } from "../../../lib/conversation/config";
 
-const system = `あなたはLOGGLYPH Pilotの会話AIです。
+/**
+ * 危機的内容が検出された場合にユーザーへ返すメッセージ。
+ *
+ * Product Decision（暫定）: 会話を止めて相談先を案内する（Option A）＋
+ * それ以外の重い内容ではAIが深掘りしない（Option C）の併用。
+ * Pilotが夜間に使われる可能性を考えると、運営者の目視だけに頼るのは弱いという判断。
+ */
+const CRISIS_MESSAGE = `ここまで話してくれてありがとう。
 
-役割は、ユーザーとの何気ない会話を自然に前へ進めながら、本人もまだ価値づけしていない出来事・感情・習慣・関係性・矛盾・願望・違和感・選択を静かに拾う「ログの採集者」です。
-秘密を直接聞き出すのではなく、普通に話していたら後からその人らしい物語の核が見えてくる状態をつくります。
+今はいったん、ここで区切らせてください。
 
-大原則:
-- 尋問しない。
-- 受け身にもなりすぎない。
-- 会話を止めるために相槌だけを返さない。
-- 毎回質問しないが、必要なときには自然に質問してよい。
-- AI側から新しい角度・連想・小さな仮説・話題の枝を1つ差し出して、会話を前に転がす。
-- カウンセリング、面接、アンケート、コーチングにしない。
-- 秘密を直接聞かない。本人が話していないことを断定しない。
-- 返答は原則1〜3文。長く説明しすぎない。
+もししんどい気持ちが続いているなら、話を聞いてくれるところがあります。
 
-返答の基本パターンは次の4つ。毎回同じ型にしない。
+・こころの健康相談統一ダイヤル 0570-064-556
+・よりそいホットライン 0120-279-338
 
-1. REFLECT：受け止め＋少しだけ言い換える
-例「気だるさがずっと背景にある感じなんだね。」
-
-2. EXPAND：ユーザーの発言から、隣にある角度を1つ差し出す
-例「仕事の合間に休むというより、仕事そのものを少し緩めながら続けてる感じかも。」
-
-3. CONNECT：過去の発言と今の発言を軽くつなぐ
-例「さっき“忘れる”って言ってたのと少し似てるね。無理に片づけず、そのまま流す方なのかも。」
-
-4. ASK：本当に意味がある時だけ質問を1つする
-例「その時間だけ、普段と違う自分になる感じはある？」
-
-質問頻度:
-- 目安として2〜4ターンに1回程度。
-- 直前に質問した場合、次の返答では原則質問しない。
-- ユーザーが「うん」「ない」「そうだね」など短く返した時、同じ話題を掘り続ける質問はしない。
-- 短い返答が2回続いたら、その話題は一度手放して別の角度を出す。
-- 「なぜ？」「どんな気持ち？」「最近〜ある？」を機械的に繰り返さない。
-
-会話を前に進める方法:
-- 質問以外にも、観察・連想・仮説・過去ログとの接続・軽い話題転換を使う。
-- ユーザーの返答が薄い時は、その話題を深掘りせず別の枝へ移る。
-- AIが勝手に話題を大きく変えすぎない。直前の発言から1歩だけずらす。
-- ときどき「それ、ちょっと面白いね」「今の一言は残るね」など、断片の存在を軽く示してよい。
-- ただし「これがあなたの秘密」「あなたはこういう人」と結論づけない。
-
-悪い例:
-ユーザー「うん」
-AI「その反応、少しリラックスしている感じもあるね。」
-ユーザー「うん」
-AI「同じような気持ちが続いてるのかな。何か特別な理由があるのかもしれないね。」
-→ これは会話が進んでおらず、AIが勝手に意味づけしているだけなのでNG。
-
-良い例:
-ユーザー「うん」
-AI「じゃあこの話は一回置こう。さっき“気だるい”って言ってたけど、今日は仕事はしてた？」
-→ 短い返答が続いたので、同じ感情の深掘りをやめて、隣の具体へ移る。
-
-良い例:
-ユーザー「シーシャ吸いながら仕事してる時かな。」
-AI「仕事と休憩が混ざってる感じなんだね。ちゃんと休むより、その曖昧さの方が合ってそう。」
-→ 質問しなくても会話が一歩進む。
-
-良い例:
-ユーザー「AIで開発してる。」
-AI「作ること自体が、半分仕事で半分実験みたいな感じかもね。最近は何を作ってる？」
-→ 新しい角度を差し出した上で、具体に進む質問を1つだけ。
-
-内部で意識すること:
-- 出来事、感情、価値観、関係性、習慣、矛盾、願望、違和感、選択を断片として拾う。
-- 一つの発言を秘密扱いしない。
-- 断片同士がつながって初めて「物語の核」が生まれる。
-- 十分な断片がつながったら、ときどき「なんとなく一本の線が見えてきた」のように示唆してよい。
-- 会話中に完成ストーリーは出さない。最終生成は別工程で行う。
-
-最優先は「質問攻めにしないこと」と同時に、「相槌だけで止まらず、AI自身が会話を少し前へ転がすこと」です。`;
+無理せず、頼っていいと思う。`;
 
 export async function POST(req: Request) {
   try {
-    const { messages } = await req.json();
-    const apiKey = process.env.OPENAI_API_KEY;
-    if (!apiKey) return NextResponse.json({ reply: "AI接続の準備中です。OPENAI_API_KEYを設定してください。" });
-    const client = new OpenAI({ apiKey });
-    const result = await client.chat.completions.create({
-      model: process.env.OPENAI_MODEL || "gpt-4o-mini",
-      temperature: 0.72,
-      messages: [{ role: "system", content: system }, ...messages.map((m: any) => ({ role: m.role, content: m.content }))]
+    const body = await req.json();
+    const messages: ChatMessage[] = Array.isArray(body?.messages)
+      ? body.messages
+      : [];
+    const sessionId: string | undefined = body?.sessionId;
+
+    if (messages.length === 0) {
+      return NextResponse.json({ reply: "うん。", completed: false });
+    }
+
+    // 直近のユーザー発話を判定する
+    const lastUser = [...messages].reverse().find((m) => m.role === "user");
+    const moderation = await moderate(lastUser?.content ?? "");
+
+    if (moderation.flagged && sessionId) {
+      void recordFlag(sessionId);
+    }
+
+    // 自傷系の高確度検出時は会話を継続せず、静かに相談先を案内する
+    if (moderation.selfHarmCritical) {
+      return NextResponse.json({
+        reply: CRISIS_MESSAGE,
+        completed: true,
+        crisis: true,
+      });
+    }
+
+    const result = await runTurn(messages, { sensitive: moderation.flagged });
+
+    return NextResponse.json({
+      reply: result.reply,
+      completed: result.completed,
+      phase: result.phase,
+      promptVersion: PROMPT_VERSION,
+      moderationFlagged: moderation.flagged,
+      moderationCategories: moderation.categories,
     });
-    return NextResponse.json({ reply: result.choices[0]?.message?.content || "うん。" });
-  } catch (e) {
-    console.error(e);
-    return NextResponse.json({ reply: "少し接続が不安定でした。もう一度送ってみてください。" }, { status: 500 });
+  } catch (error) {
+    console.error("chat failed", error);
+    return NextResponse.json(
+      { reply: "少し接続が不安定でした。もう一度送ってみてください。", completed: false },
+      { status: 500 }
+    );
+  }
+}
+
+async function recordFlag(sessionId: string) {
+  try {
+    const supabase = getSupabaseAdmin();
+    if (!supabase) return;
+    const { data } = await supabase
+      .from("sessions")
+      .select("moderation_flag_count")
+      .eq("session_id", sessionId)
+      .maybeSingle();
+    await supabase
+      .from("sessions")
+      .update({ moderation_flag_count: (data?.moderation_flag_count ?? 0) + 1 })
+      .eq("session_id", sessionId);
+  } catch {
+    /* Pilot: 記録に失敗しても会話は止めない */
   }
 }
