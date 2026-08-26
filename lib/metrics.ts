@@ -32,6 +32,25 @@ export interface ConversationMetrics {
   aiAvgCharsPerMessage: number | null;
 
   /**
+   * 冒頭Episode（1つ目のAI発話）の文字数。
+   *
+   * Episodeは固定のseed文であり、AIの振る舞いではない。
+   * 平均103文字あるため、4往復程度の会話では
+   * AI側文字数の半分近くをEpisodeが占めてしまう。
+   */
+  episodeCharCount: number;
+  /** Episodeを除いたAI側の文字数（＝実際の応答だけ） */
+  dialogueAiCharCount: number;
+  /**
+   * 会話中の発話量に占めるユーザーの割合。
+   *
+   * 分母からEpisodeを除いている。Question Turn Rate と同じ扱い。
+   * 「User / AI 文字比」はEpisodeを含むため、会話が短いほど
+   * AI優勢に見える偏りがあった。
+   */
+  userDialogueShare: number | null;
+
+  /**
    * Question Turn Rate。
    * AI発話のうち「？」を含むものの割合。
    *
@@ -63,11 +82,17 @@ export function computeConversationMetrics(
   let userMessageCount = 0;
   let aiCharCount = 0;
   let userCharCount = 0;
+  let episodeCharCount = 0;
+  let seenEpisode = false;
 
   for (const m of messages) {
     if (m.role === "assistant") {
       aiMessageCount += 1;
       aiCharCount += m.content.length;
+      if (!seenEpisode) {
+        episodeCharCount = m.content.length;
+        seenEpisode = true;
+      }
     } else {
       userMessageCount += 1;
       userCharCount += m.content.length;
@@ -107,6 +132,9 @@ export function computeConversationMetrics(
     }
   }
 
+  const dialogueAiCharCount = aiCharCount - episodeCharCount;
+  const dialogueTotal = dialogueAiCharCount + userCharCount;
+
   return {
     aiMessageCount,
     userMessageCount,
@@ -114,6 +142,9 @@ export function computeConversationMetrics(
     userCharCount,
     aiAvgCharsPerMessage:
       aiMessageCount > 0 ? aiCharCount / aiMessageCount : null,
+    episodeCharCount,
+    dialogueAiCharCount,
+    userDialogueShare: dialogueTotal > 0 ? userCharCount / dialogueTotal : null,
     questionTurns,
     questionEligibleTurns,
     questionTurnRate:
@@ -137,6 +168,8 @@ export function aggregateMetrics(
       userMessageCount: a.userMessageCount + m.userMessageCount,
       aiCharCount: a.aiCharCount + m.aiCharCount,
       userCharCount: a.userCharCount + m.userCharCount,
+      episodeCharCount: a.episodeCharCount + m.episodeCharCount,
+      dialogueAiCharCount: a.dialogueAiCharCount + m.dialogueAiCharCount,
       questionTurns: a.questionTurns + m.questionTurns,
       questionEligibleTurns: a.questionEligibleTurns + m.questionEligibleTurns,
       spontaneousContinuations:
@@ -149,6 +182,8 @@ export function aggregateMetrics(
       userMessageCount: 0,
       aiCharCount: 0,
       userCharCount: 0,
+      episodeCharCount: 0,
+      dialogueAiCharCount: 0,
       questionTurns: 0,
       questionEligibleTurns: 0,
       spontaneousContinuations: 0,
@@ -160,6 +195,10 @@ export function aggregateMetrics(
     ...sum,
     aiAvgCharsPerMessage:
       sum.aiMessageCount > 0 ? sum.aiCharCount / sum.aiMessageCount : null,
+    userDialogueShare:
+      sum.dialogueAiCharCount + sum.userCharCount > 0
+        ? sum.userCharCount / (sum.dialogueAiCharCount + sum.userCharCount)
+        : null,
     questionTurnRate:
       sum.questionEligibleTurns > 0
         ? sum.questionTurns / sum.questionEligibleTurns

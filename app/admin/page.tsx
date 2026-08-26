@@ -247,7 +247,12 @@ export default async function AdminHome() {
 
       <h2>Diagnostic（成功判定には使わない）</h2>
       <section className="stats compact">
-        <Stat label="User / AI 文字比" value={charRatio} note="参考値" />
+        <Stat label="User / AI 文字比" value={charRatio} note="Episodeを含む／参考値" />
+        <Stat
+          label="ユーザー発話比（Episode除外）"
+          value={rate(m.userDialogueShare)}
+          note="冒頭Episodeを分母から除いた値"
+        />
         <Stat
           label="平均ユーザー発話数"
           value={avg(rows.map((r) => r.user_message_count ?? 0))}

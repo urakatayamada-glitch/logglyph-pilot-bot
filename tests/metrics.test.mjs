@@ -19,11 +19,17 @@ function computeConversationMetrics(messages) {
   let aiMessageCount = 0,
     userMessageCount = 0,
     aiCharCount = 0,
-    userCharCount = 0;
+    userCharCount = 0,
+    episodeCharCount = 0;
+  let seenEpisode = false;
   for (const m of messages) {
     if (m.role === "assistant") {
       aiMessageCount++;
       aiCharCount += m.content.length;
+      if (!seenEpisode) {
+        episodeCharCount = m.content.length;
+        seenEpisode = true;
+      }
     } else {
       userMessageCount++;
       userCharCount += m.content.length;
@@ -55,12 +61,18 @@ function computeConversationMetrics(messages) {
     }
   }
 
+  const dialogueAiCharCount = aiCharCount - episodeCharCount;
+  const dialogueTotal = dialogueAiCharCount + userCharCount;
+
   return {
     aiMessageCount,
     userMessageCount,
     aiCharCount,
     userCharCount,
     aiAvgCharsPerMessage: aiMessageCount > 0 ? aiCharCount / aiMessageCount : null,
+    episodeCharCount,
+    dialogueAiCharCount,
+    userDialogueShare: dialogueTotal > 0 ? userCharCount / dialogueTotal : null,
     questionTurns,
     questionEligibleTurns,
     questionTurnRate:
@@ -165,4 +177,28 @@ test("空の会話でも例外を出さない", () => {
   assert.equal(m.aiAvgCharsPerMessage, null);
   assert.equal(m.questionTurnRate, null);
   assert.equal(m.spontaneousContinuationRate, null);
+});
+
+// ---- Episode を除いた発話比（v1.4.1） ----
+test("ユーザー発話比：冒頭Episodeを分母から除く", () => {
+  // Episode 100文字 / AI応答 20文字 / ユーザー 40文字
+  const msgs = [
+    { role: "assistant", content: "え".repeat(100) },
+    { role: "user", content: "う".repeat(40) },
+    { role: "assistant", content: "あ".repeat(20) },
+  ];
+  const m = computeConversationMetrics(msgs);
+  assert.equal(m.episodeCharCount, 100);
+  assert.equal(m.dialogueAiCharCount, 20);
+  // Episodeを含めると 40/160 = 25% だが、除けば 40/60 = 66.7%
+  assert.equal(Math.round(m.userDialogueShare * 1000) / 1000, 0.667);
+});
+
+test("AI発話が冒頭Episodeだけなら、発話比はユーザー100%になる", () => {
+  const m = computeConversationMetrics([
+    { role: "assistant", content: "え".repeat(100) },
+    { role: "user", content: "うん" },
+  ]);
+  assert.equal(m.dialogueAiCharCount, 0);
+  assert.equal(m.userDialogueShare, 1);
 });
