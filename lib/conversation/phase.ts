@@ -23,6 +23,22 @@ export interface ChatMessage {
   content: string;
 }
 
+/**
+ * 直前のAI発話が質問だったかどうか。
+ *
+ * 「質問と質問の間に、質問しないターンを1つ挟む」というルールは
+ * promptのお願いでは守られなかった（実測で質問率75%）。
+ * そこでサーバー側で判定し、その場限りの絶対制約として毎ターン渡す。
+ */
+export function lastAssistantAskedQuestion(messages: ChatMessage[]): boolean {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role !== "assistant") continue;
+    const t = messages[i].content;
+    return t.includes("？") || t.includes("?");
+  }
+  return false;
+}
+
 /** 履歴の中のユーザー発話数を数える */
 export function countUserMessages(messages: ChatMessage[]): number {
   return messages.filter((m) => m.role === "user").length;

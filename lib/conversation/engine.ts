@@ -5,12 +5,14 @@ import {
   ConversationPhase,
   canAiChooseToClose,
   countUserMessages,
+  lastAssistantAskedQuestion,
   resolvePhase,
 } from "./phase";
 import { BASE_PROMPT } from "./prompts/base";
 import {
   CLOSING_PROMPT,
   EXPLORING_PROMPT,
+  NO_QUESTION_THIS_TURN,
   SENSITIVE_TOPIC_PROMPT,
   WRAP_UP_PROMPT,
 } from "./prompts/phases";
@@ -42,9 +44,11 @@ function phaseInstruction(phase: ConversationPhase): string {
 
 export function buildSystemPrompt(
   phase: ConversationPhase,
-  opts: { sensitive?: boolean } = {}
+  opts: { sensitive?: boolean; noQuestion?: boolean } = {}
 ): string {
   const parts = [BASE_PROMPT, phaseInstruction(phase)];
+  // 質問の連続を、promptのお願いではなくサーバー側の判定で止める
+  if (opts.noQuestion && phase !== "CLOSING") parts.push(NO_QUESTION_THIS_TURN);
   if (opts.sensitive) parts.push(SENSITIVE_TOPIC_PROMPT);
   return parts.join("\n\n---\n\n");
 }
@@ -105,12 +109,16 @@ export async function runTurn(
 
   const userCount = countUserMessages(messages);
   const phase = resolvePhase(userCount);
+  const noQuestion = lastAssistantAskedQuestion(messages);
 
   const request: OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming = {
     model: MODELS.conversation,
     temperature: 0.72,
     messages: [
-      { role: "system", content: buildSystemPrompt(phase, opts) },
+      {
+        role: "system",
+        content: buildSystemPrompt(phase, { ...opts, noQuestion }),
+      },
       ...messages.map((m) => ({ role: m.role, content: m.content })),
     ],
   };

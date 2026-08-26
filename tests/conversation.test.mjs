@@ -114,3 +114,46 @@ test("集計：発話数と文字数", () => {
   assert.equal(s.userCharCount, 6);
   assert.equal(s.aiCharCount, 4);
 });
+
+// ---- 質問の連続禁止（v1.4.0：コード側で強制する） ----
+function lastAssistantAskedQuestion(messages) {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role !== "assistant") continue;
+    const t = messages[i].content;
+    return t.includes("？") || t.includes("?");
+  }
+  return false;
+}
+
+test("直前のAI発話が質問なら、次のターンは質問を禁止する", () => {
+  assert.equal(
+    lastAssistantAskedQuestion([
+      { role: "assistant", content: "それ、いつ頃の話？" },
+      { role: "user", content: "学生のとき" },
+    ]),
+    true
+  );
+});
+
+test("直前のAI発話が質問でなければ制約はかからない", () => {
+  assert.equal(
+    lastAssistantAskedQuestion([
+      { role: "assistant", content: "それ、いつ頃の話？" },
+      { role: "user", content: "学生のとき" },
+      { role: "assistant", content: "学生のときなんだ。" },
+      { role: "user", content: "うん" },
+    ]),
+    false
+  );
+});
+
+test("AI発話がまだ無ければ制約はかからない", () => {
+  assert.equal(lastAssistantAskedQuestion([{ role: "user", content: "あ" }]), false);
+});
+
+test("半角の疑問符でも判定する", () => {
+  assert.equal(
+    lastAssistantAskedQuestion([{ role: "assistant", content: "when?" }]),
+    true
+  );
+});
