@@ -71,27 +71,27 @@ body::after,
 
 body::after{
   background:
-    radial-gradient(closest-side circle at 26% 22%, rgba(253,214,208,.85), rgba(253,214,208,0) 70%),
-    radial-gradient(closest-side circle at 78% 74%, rgba(160,206,236,.75), rgba(160,206,236,0) 70%);
-  animation:drift-a 58s ease-in-out infinite alternate;
+    radial-gradient(closest-side circle at 26% 22%, rgba(252,196,188,.95), rgba(252,196,188,0) 72%),
+    radial-gradient(closest-side circle at 78% 74%, rgba(140,196,234,.9), rgba(140,196,234,0) 72%);
+  animation:drift-a 32s ease-in-out infinite alternate;
 }
 
 .shell::before{
   background:
-    radial-gradient(closest-side circle at 72% 18%, rgba(226,219,244,.8), rgba(226,219,244,0) 72%),
-    radial-gradient(closest-side circle at 20% 80%, rgba(213,238,226,.7), rgba(213,238,226,0) 72%);
-  animation:drift-b 71s ease-in-out infinite alternate;
+    radial-gradient(closest-side circle at 72% 18%, rgba(216,206,242,.9), rgba(216,206,242,0) 74%),
+    radial-gradient(closest-side circle at 20% 80%, rgba(196,234,216,.85), rgba(196,234,216,0) 74%);
+  animation:drift-b 41s ease-in-out infinite alternate;
 }
 
 @keyframes drift-a{
-  0%   {transform:translate3d(-4%,-3%,0) scale(1.05)}
-  50%  {transform:translate3d(5%,4%,0)   scale(1.16)}
-  100% {transform:translate3d(-2%,6%,0)  scale(1.04)}
+  0%   {transform:translate3d(-11%,-8%,0) scale(1.02)}
+  50%  {transform:translate3d(12%,10%,0)  scale(1.28)}
+  100% {transform:translate3d(-6%,14%,0)  scale(1.06)}
 }
 @keyframes drift-b{
-  0%   {transform:translate3d(4%,5%,0)   scale(1.12)}
-  50%  {transform:translate3d(-5%,-4%,0) scale(1.02)}
-  100% {transform:translate3d(3%,-6%,0)  scale(1.14)}
+  0%   {transform:translate3d(10%,12%,0)   scale(1.24)}
+  50%  {transform:translate3d(-13%,-9%,0)  scale(1.0)}
+  100% {transform:translate3d(8%,-14%,0)   scale(1.26)}
 }
 
 /* 動きが苦手な人・端末設定で止めている人には静止させる */
@@ -138,15 +138,15 @@ body::after{
   z-index:0;
   pointer-events:none;
   background:
-    radial-gradient(closest-side circle at 46% 40%, rgba(255,249,222,.9), rgba(255,249,222,0) 68%),
-    radial-gradient(closest-side circle at 62% 66%, rgba(196,232,231,.65), rgba(196,232,231,0) 70%);
-  animation:breathe 47s ease-in-out infinite alternate;
+    radial-gradient(closest-side circle at 46% 40%, rgba(255,248,214,.95), rgba(255,248,214,0) 70%),
+    radial-gradient(closest-side circle at 62% 66%, rgba(176,224,224,.8), rgba(176,224,224,0) 72%);
+  animation:breathe 26s ease-in-out infinite alternate;
   will-change:transform;
 }
 @keyframes breathe{
-  0%   {transform:translate3d(-3%,2%,0)  scale(1)}
-  50%  {transform:translate3d(3%,-2%,0)  scale(1.12)}
-  100% {transform:translate3d(-1%,-4%,0) scale(1.03)}
+  0%   {transform:translate3d(-9%,7%,0)   scale(1)}
+  50%  {transform:translate3d(10%,-6%,0)  scale(1.26)}
+  100% {transform:translate3d(-4%,-11%,0) scale(1.08)}
 }
 
 .card::before{
@@ -327,6 +327,18 @@ button.ghost.restart{margin-top:18px}
 .admin h1{font-size:15px;letter-spacing:.2em}
 .admin h2{font-size:11px;letter-spacing:.18em;color:var(--ink-faint);margin:34px 0 12px;font-weight:600}
 .admin-error{color:#b4574e;font-size:13px;line-height:1.85}
+.admin-warn{
+  border:1px solid rgba(214,160,150,.8);
+  background:rgba(255,240,236,.85);
+  border-radius:16px;padding:16px 18px;margin-bottom:22px;
+  font-size:13px;line-height:1.9;color:#7d4a42;
+}
+.admin-warn strong{color:#a3453a}
+.admin-warn p{margin:8px 0 0}
+.admin-warn code{
+  background:rgba(255,255,255,.8);border-radius:5px;
+  padding:2px 6px;font-size:12px;
+}
 .admin-empty{color:var(--ink-faint);font-size:13px}
 
 .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(172px,1fr));gap:12px}

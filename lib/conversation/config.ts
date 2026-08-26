@@ -7,7 +7,7 @@
  */
 
 /** Prompt / Conversation Engine のバージョン。prompt文言を変えたら必ず更新する。 */
-export const PROMPT_VERSION = "v1.0.0";
+export const PROMPT_VERSION = "v1.1.0";
 
 /**
  * 会話の長さに関する閾値（すべて「ユーザーの発話数」で数える）
@@ -17,11 +17,17 @@ export const PROMPT_VERSION = "v1.0.0";
  */
 export const CONVERSATION_LIMITS = {
   /** この数に達するまでは、AIは自然終了を急がない（目安） */
-  naturalCloseTarget: 5,
+  naturalCloseTarget: 4,
   /** この数を超えたら、AIへ「そろそろ締める方向で」と伝える */
-  wrapUpHint: 8,
-  /** この数に達したら、サーバー側が終了専用モードへ強制的に切り替える */
-  hardLimit: 10,
+  wrapUpHint: 6,
+  /**
+   * この数に達したら、サーバー側が終了専用モードへ強制的に切り替える。
+   *
+   * v1.1.0で10→8に短縮。実際の会話で、記憶が語られ終わったあともAIが
+   * 新しい話題を探し続け、話題が3つに増えてしまったため。
+   * 一つの記憶を扱い終えるのに必要な往復は4〜6程度だった。
+   */
+  hardLimit: 8,
 } as const;
 
 /** 1クライアントが1日に開始できるセッション数の上限 */

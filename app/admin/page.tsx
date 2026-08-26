@@ -48,13 +48,28 @@ export default async function AdminHome() {
   }
 
   const supabase = getSupabaseAdmin()!;
-  const { data } = await supabase
-    .from("sessions")
-    .select("*")
-    .order("started_at", { ascending: false })
-    .limit(200);
+  const [{ data, error }, episodeCount] = await Promise.all([
+    supabase
+      .from("sessions")
+      .select("*")
+      .order("started_at", { ascending: false })
+      .limit(200),
+    supabase
+      .from("memory_trigger_episodes")
+      .select("id", { count: "exact", head: true }),
+  ]);
 
   const rows = (data ?? []) as SessionRow[];
+
+  /**
+   * キーの取り違えを検出する。
+   *
+   * service_role（secret）キーはRLSを無視して読めるが、
+   * publishable / anon キーだとRLSに弾かれ、エラーではなく「0件」が返る。
+   * Episodeを投入済みなのに0件に見える場合は、ほぼ確実にキーが違う。
+   */
+  const episodesVisible = episodeCount.count ?? 0;
+  const keyLooksWrong = episodesVisible === 0;
   const completed = rows.filter((r) => r.status === "completed");
   const withMemory = rows.filter((r) => r.memory_found);
   const withHidden = rows.filter((r) => r.hidden_candidate_found);
@@ -87,6 +102,29 @@ export default async function AdminHome() {
         <h1>LOGGLYPH ADMIN</h1>
         <span className="admin-sub">Pilot Observability</span>
       </div>
+
+      {keyLooksWrong && (
+        <div className="admin-warn">
+          <strong>DBが読めていません。</strong>
+          <p>
+            Episodeが0件に見えています。Migrationを実行済みなら、
+            Vercelの <code>SUPABASE_SERVICE_ROLE_KEY</code> に
+            publishable（anon）キーが入っている可能性が高いです。
+          </p>
+          <p>
+            Supabase → Project Settings → API Keys の
+            <strong> service_role（secret）</strong> の値に差し替えて、
+            Vercelで再デプロイしてください。
+            この状態では会話も記録されません。
+          </p>
+        </div>
+      )}
+
+      {error && (
+        <div className="admin-warn">
+          <strong>読み取りエラー:</strong> {error.message}
+        </div>
+      )}
 
       <section className="stats">
         <Stat label="Sessions" value={String(rows.length)} />
