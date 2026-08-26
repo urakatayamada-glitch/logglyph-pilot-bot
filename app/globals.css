@@ -49,6 +49,58 @@ body::before{
   z-index:0;
 }
 
+/* ------------------------------------------------------------
+   漂うグラデーション
+
+   下地のグラデーションの上に、輪郭のない色の塊をゆっくり流している。
+   filter:blur() は使わず、radial-gradient の落ち込みだけでぼかしている
+   （毎フレームぼかし直さないので、モバイルでも軽い）。
+
+   40〜70秒周期。気づくかどうかの速度に抑えている。
+   会話に集中しているときに動きが目に入ると邪魔になるため。
+   ------------------------------------------------------------ */
+body::after,
+.shell::before{
+  content:"";
+  position:fixed;
+  inset:-25%;
+  pointer-events:none;
+  z-index:-1;
+  will-change:transform;
+}
+
+body::after{
+  background:
+    radial-gradient(closest-side circle at 26% 22%, rgba(253,214,208,.85), rgba(253,214,208,0) 70%),
+    radial-gradient(closest-side circle at 78% 74%, rgba(160,206,236,.75), rgba(160,206,236,0) 70%);
+  animation:drift-a 58s ease-in-out infinite alternate;
+}
+
+.shell::before{
+  background:
+    radial-gradient(closest-side circle at 72% 18%, rgba(226,219,244,.8), rgba(226,219,244,0) 72%),
+    radial-gradient(closest-side circle at 20% 80%, rgba(213,238,226,.7), rgba(213,238,226,0) 72%);
+  animation:drift-b 71s ease-in-out infinite alternate;
+}
+
+@keyframes drift-a{
+  0%   {transform:translate3d(-4%,-3%,0) scale(1.05)}
+  50%  {transform:translate3d(5%,4%,0)   scale(1.16)}
+  100% {transform:translate3d(-2%,6%,0)  scale(1.04)}
+}
+@keyframes drift-b{
+  0%   {transform:translate3d(4%,5%,0)   scale(1.12)}
+  50%  {transform:translate3d(-5%,-4%,0) scale(1.02)}
+  100% {transform:translate3d(3%,-6%,0)  scale(1.14)}
+}
+
+/* 動きが苦手な人・端末設定で止めている人には静止させる */
+@media (prefers-reduced-motion: reduce){
+  body::after,
+  .shell::before,
+  .card::after{animation:none}
+}
+
 .shell{
   position:relative;
   z-index:1;
@@ -78,15 +130,35 @@ body::before{
     #cfe9ef 76%,
     #bfe3ee 100%);
 }
+/* 会話面の中でも、中央のクリームがゆっくり息をしている */
+.card::after{
+  content:"";
+  position:absolute;
+  inset:-20%;
+  z-index:0;
+  pointer-events:none;
+  background:
+    radial-gradient(closest-side circle at 46% 40%, rgba(255,249,222,.9), rgba(255,249,222,0) 68%),
+    radial-gradient(closest-side circle at 62% 66%, rgba(196,232,231,.65), rgba(196,232,231,0) 70%);
+  animation:breathe 47s ease-in-out infinite alternate;
+  will-change:transform;
+}
+@keyframes breathe{
+  0%   {transform:translate3d(-3%,2%,0)  scale(1)}
+  50%  {transform:translate3d(3%,-2%,0)  scale(1.12)}
+  100% {transform:translate3d(-1%,-4%,0) scale(1.03)}
+}
+
 .card::before{
   content:"";
   position:absolute;
   inset:0;
+  z-index:1;
   background-image:var(--noise);
   opacity:.055;
   pointer-events:none;
 }
-.card > *{position:relative;z-index:1}
+.card > *{position:relative;z-index:2}
 
 header{
   display:flex;
