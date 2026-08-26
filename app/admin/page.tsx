@@ -1,6 +1,10 @@
 import Link from "next/link";
 import { requireAdmin } from "../../lib/admin-guard";
-import { getSupabaseAdmin, isAdminConfigured } from "../../lib/supabase-server";
+import {
+  describeSupabaseConfig,
+  getSupabaseAdmin,
+  isAdminConfigured,
+} from "../../lib/supabase-server";
 
 export const dynamic = "force-dynamic";
 
@@ -70,6 +74,7 @@ export default async function AdminHome() {
    */
   const episodesVisible = episodeCount.count ?? 0;
   const keyLooksWrong = episodesVisible === 0;
+  const config = describeSupabaseConfig();
   const completed = rows.filter((r) => r.status === "completed");
   const withMemory = rows.filter((r) => r.memory_found);
   const withHidden = rows.filter((r) => r.hidden_candidate_found);
@@ -103,26 +108,35 @@ export default async function AdminHome() {
         <span className="admin-sub">Pilot Observability</span>
       </div>
 
-      {keyLooksWrong && (
+      {(keyLooksWrong || error) && (
         <div className="admin-warn">
           <strong>DBが読めていません。</strong>
+          {error && (
+            <p>
+              エラー内容: <code>{error.message}</code>
+            </p>
+          )}
           <p>
-            Episodeが0件に見えています。Migrationを実行済みなら、
-            Vercelの <code>SUPABASE_SERVICE_ROLE_KEY</code> に
-            publishable（anon）キーが入っている可能性が高いです。
+            現在の設定 — URL: <code>{config.url}</code> / キー種別:{" "}
+            <code>{config.keyKind}</code>（{config.keyLength}文字）
           </p>
-          <p>
-            Supabase → Project Settings → API Keys の
-            <strong> service_role（secret）</strong> の値に差し替えて、
-            Vercelで再デプロイしてください。
-            この状態では会話も記録されません。
-          </p>
-        </div>
-      )}
-
-      {error && (
-        <div className="admin-warn">
-          <strong>読み取りエラー:</strong> {error.message}
+          {config.keyKind.includes("誤り") && (
+            <p>
+              <strong>
+                SUPABASE_SERVICE_ROLE_KEY に publishable キーが入っています。
+              </strong>
+              Supabase → Project Settings → API Keys の Secret keys にある値
+              （<code>sb_secret_</code> で始まるもの）に差し替えてください。
+            </p>
+          )}
+          {config.rawUrlHadTrailingSlash && (
+            <p>
+              NEXT_PUBLIC_SUPABASE_URL の末尾に <code>/</code>{" "}
+              が付いていました。コード側で除去して接続していますが、
+              環境変数からも外しておくことを推奨します。
+            </p>
+          )}
+          <p>この状態では会話も記録されません。</p>
         </div>
       )}
 
