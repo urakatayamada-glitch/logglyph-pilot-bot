@@ -5,6 +5,12 @@ import {
   getSupabaseAdmin,
   isAdminConfigured,
 } from "../../lib/supabase-server";
+import {
+  aggregateMetrics,
+  computeConversationMetrics,
+  LogMessage,
+  SPONTANEOUS_MIN_CHARS,
+} from "../../lib/metrics";
 
 export const dynamic = "force-dynamic";
 
@@ -30,6 +36,16 @@ interface SessionRow {
 function pct(n: number, d: number) {
   if (!d) return "—";
   return `${Math.round((n / d) * 100)}%`;
+}
+
+function rate(v: number | null) {
+  if (v == null) return "—";
+  return `${Math.round(v * 100)}%`;
+}
+
+function num(v: number | null, digits = 1) {
+  if (v == null) return "—";
+  return v.toFixed(digits);
 }
 
 function avg(values: number[]) {
@@ -75,6 +91,32 @@ export default async function AdminHome() {
   const episodesVisible = episodeCount.count ?? 0;
   const keyLooksWrong = episodesVisible === 0;
   const config = describeSupabaseConfig();
+
+  // 会話ログから算出する指標（DB追加変更なし）
+  const ids = rows.map((r) => r.session_id);
+  let logs: { session_id: string; role: "user" | "assistant"; content: string }[] =
+    [];
+  if (ids.length > 0) {
+    const { data: logData } = await supabase
+      .from("conversation_logs")
+      .select("session_id, role, content")
+      .in("session_id", ids)
+      .order("created_at", { ascending: true });
+    logs = (logData ?? []) as typeof logs;
+  }
+
+  const bySession = new Map<string, LogMessage[]>();
+  for (const l of logs) {
+    const arr = bySession.get(l.session_id) ?? [];
+    arr.push({ role: l.role, content: l.content });
+    bySession.set(l.session_id, arr);
+  }
+  const perSession = ids
+    .map((id) => bySession.get(id))
+    .filter((v): v is LogMessage[] => Boolean(v?.length))
+    .map(computeConversationMetrics);
+  const m = aggregateMetrics(perSession);
+
   const completed = rows.filter((r) => r.status === "completed");
   const withMemory = rows.filter((r) => r.memory_found);
   const withHidden = rows.filter((r) => r.hidden_candidate_found);
@@ -84,7 +126,7 @@ export default async function AdminHome() {
 
   const totalUserChars = rows.reduce((a, r) => a + (r.user_char_count ?? 0), 0);
   const totalAiChars = rows.reduce((a, r) => a + (r.ai_char_count ?? 0), 0);
-  const ratio =
+  const charRatio =
     totalUserChars + totalAiChars > 0
       ? `${Math.round((totalUserChars / (totalUserChars + totalAiChars)) * 100)}% / ${Math.round(
           (totalAiChars / (totalUserChars + totalAiChars)) * 100
@@ -141,28 +183,19 @@ export default async function AdminHome() {
         </div>
       )}
 
+      <h2>Primary KPI</h2>
       <section className="stats">
         <Stat label="Sessions" value={String(rows.length)} />
         <Stat
-          label="Memory Extraction Yield"
+          label="Memory Found Rate"
           value={pct(withMemory.length, rows.length)}
-          note={`${withMemory.length} / ${rows.length}`}
+          note={`Level 1 ／ ${withMemory.length} / ${rows.length}`}
         />
         <Stat
-          label="Completion Rate"
+          label="Conversation Completion"
           value={pct(completed.length, rows.length)}
           note={`${completed.length} / ${rows.length}`}
         />
-        <Stat
-          label="Hidden Candidate"
-          value={pct(withHidden.length, rows.length)}
-          note={`${withHidden.length} 件`}
-        />
-        <Stat
-          label="平均ユーザー発話数"
-          value={avg(rows.map((r) => r.user_message_count ?? 0))}
-        />
-        <Stat label="User / AI 文字比" value={ratio} />
         <Stat
           label="話しやすさ 平均"
           value={avg(rated.map((r) => r.user_rating as number))}
@@ -172,6 +205,57 @@ export default async function AdminHome() {
           label="また話したい"
           value={pct(againYes.length, againAnswered.length)}
           note={`${againAnswered.length} 件回答`}
+        />
+        <Stat
+          label="AI平均文字数 / Message"
+          value={num(m.aiAvgCharsPerMessage, 0)}
+          note="短いほど聞き役に寄っている"
+        />
+        <Stat
+          label="Question Turn Rate"
+          value={rate(m.questionTurnRate)}
+          note={`${m.questionTurns} / ${m.questionEligibleTurns}（冒頭Episodeは除外）`}
+        />
+        <Stat
+          label="Spontaneous Continuation Proxy"
+          value={rate(m.spontaneousContinuationRate)}
+          note={`${m.spontaneousContinuations} / ${m.spontaneousOpportunities}　代理指標`}
+        />
+      </section>
+
+      <div className="admin-note">
+        <strong>Spontaneous Continuation Proxy は代理指標です。</strong>
+        AIが質問しなかった発話の直後に、ユーザーが {SPONTANEOUS_MIN_CHARS}{" "}
+        文字以上を話した割合を数えています。
+        「記憶が実際に追加されたか」は機械判定できないため、発話量で近似したものです。
+        真に意味が追加されたことを保証しません。
+      </div>
+
+      <h2>Level 2（Primary KPIではない）</h2>
+      <section className="stats">
+        <Stat
+          label="Hidden Candidate"
+          value={pct(withHidden.length, rows.length)}
+          note={`${withHidden.length} 件 ／ null は正常`}
+        />
+      </section>
+
+      <div className="admin-note">
+        Hidden Candidate は、Memory の中に本人がまだ十分言語化していなかった意味が
+        存在した場合にのみ生成されます。<strong>null は正常な結果です。</strong>
+        本人が自分で意味づけまで語り切った場合、Hidden は残りません。
+      </div>
+
+      <h2>Diagnostic（成功判定には使わない）</h2>
+      <section className="stats">
+        <Stat label="User / AI 文字比" value={charRatio} note="参考値" />
+        <Stat
+          label="平均ユーザー発話数"
+          value={avg(rows.map((r) => r.user_message_count ?? 0))}
+        />
+        <Stat
+          label="AI / User 発話回数"
+          value={`${m.aiMessageCount} / ${m.userMessageCount}`}
         />
       </section>
 

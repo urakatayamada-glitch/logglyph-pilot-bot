@@ -7,7 +7,7 @@
  */
 
 /** Prompt / Conversation Engine のバージョン。prompt文言を変えたら必ず更新する。 */
-export const PROMPT_VERSION = "v1.3.1";
+export const PROMPT_VERSION = "v1.3.2";
 
 /**
  * 会話の長さに関する閾値（すべて「ユーザーの発話数」で数える）
@@ -48,10 +48,16 @@ export const MODELS = {
    * といった否定形の指示を守りきれず、実機テストで毎ターン質問・感嘆符連発・
    * 持論の開示が繰り返された。prompt側の強化では収束しなかったため。
    *
-   * 環境変数 OPENAI_MODEL で上書きできるので、コストを抑えたい場合は
-   * gpt-4o-mini に戻せる（会話品質は落ちる）。
+   * v1.3.2 で環境変数を分離した。
+   *   OPENAI_CONVERSATION_MODEL … 会話用（新規・こちらを優先）
+   *   OPENAI_MODEL              … 旧変数。既存のVercel設定を壊さないため後方互換で参照
+   *
+   * Pilot期間中は snapshot 固定を推奨（可変エイリアスだとモデル側の更新で
+   * 挙動が変わり、prompt_version ごとの比較が成立しなくなる）。
+   * 固定する場合は OPENAI_CONVERSATION_MODEL に snapshot 名を設定する。
    */
-  conversation: process.env.OPENAI_MODEL || "gpt-4o",
+  conversation:
+    process.env.OPENAI_CONVERSATION_MODEL || process.env.OPENAI_MODEL || "gpt-4o",
   /**
    * 構造化抽出用。1セッションに1回だけの呼び出しなので、
    * 会話用より上位のモデルを既定にしている（Memory Extraction Yieldが最重要指標のため）。

@@ -1,6 +1,10 @@
 import Link from "next/link";
 import { requireAdmin } from "../../../../lib/admin-guard";
 import { getSupabaseAdmin } from "../../../../lib/supabase-server";
+import {
+  computeConversationMetrics,
+  SPONTANEOUS_MIN_CHARS,
+} from "../../../../lib/metrics";
 
 export const dynamic = "force-dynamic";
 
@@ -42,6 +46,11 @@ export default async function SessionDetail({
 
   const rows = (logs ?? []) as LogRow[];
   const structured = session?.structured_memory as Record<string, unknown> | null;
+  const m = computeConversationMetrics(
+    rows.map((r) => ({ role: r.role, content: r.content }))
+  );
+  const fmtRate = (v: number | null) =>
+    v == null ? "—" : `${Math.round(v * 100)}%`;
 
   return (
     <main className="admin">
@@ -85,6 +94,39 @@ export default async function SessionDetail({
               warn
             />
           )}
+        </section>
+      )}
+
+      {rows.length > 0 && (
+        <section className="detail-block">
+          <h2>Conversation Metrics</h2>
+          <div className="detail-meta">
+            <Meta
+              label="AI平均文字数 / Message"
+              value={
+                m.aiAvgCharsPerMessage == null
+                  ? "—"
+                  : m.aiAvgCharsPerMessage.toFixed(0)
+              }
+            />
+            <Meta
+              label="Question Turn Rate"
+              value={`${fmtRate(m.questionTurnRate)}（${m.questionTurns}/${m.questionEligibleTurns}）`}
+            />
+            <Meta
+              label="Spontaneous Continuation Proxy"
+              value={`${fmtRate(m.spontaneousContinuationRate)}（${m.spontaneousContinuations}/${m.spontaneousOpportunities}）`}
+            />
+            <Meta
+              label="AI / User 発話回数"
+              value={`${m.aiMessageCount} / ${m.userMessageCount}`}
+            />
+          </div>
+          <p className="admin-note">
+            Question Turn Rate は冒頭のEpisodeを除外して算出しています。
+            Spontaneous Continuation Proxy は、AIが質問しなかった発話の直後に
+            ユーザーが {SPONTANEOUS_MIN_CHARS} 文字以上を話した割合による代理指標です。
+          </p>
         </section>
       )}
 
