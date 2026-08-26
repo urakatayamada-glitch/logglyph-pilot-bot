@@ -20,10 +20,15 @@ const LS_RECENT_EPISODES = "logglyph.recentEpisodes";
  * 「はじめる」を押すまでセッションをサーバーに登録しないため、
  * 読まずに離脱した人が Sessions 件数に混ざらない。
  */
-const GATE_NOTICE =
-  "会話内容はPilot改善のため運営者が確認する場合があります。" +
-  "名前・会社名・住所など特定につながる情報はなるべく書かないでください。" +
-  "また、話したくないことは話す必要はありません。途中でやめても問題ありません。";
+/*
+ * 文言はProduct Owner提供のものをそのまま使う。
+ * 1つの塊で出すと読み飛ばされるため、段落だけ分けている
+ * （前段＝データの扱い／後段＝話す側の自由）。文言自体は変えていない。
+ */
+const GATE_PARAGRAPHS = [
+  "会話内容はPilot改善のため運営者が確認する場合があります。名前・会社名・住所など特定につながる情報はなるべく書かないでください。",
+  "また、話したくないことは話す必要はありません。途中でやめても問題ありません。",
+];
 
 interface PersistedSession {
   sessionId: string;
@@ -251,7 +256,11 @@ export default function Conversation({
   if (!accepted) {
     return (
       <div className="gate">
-        <p className="gate-text">{GATE_NOTICE}</p>
+        <div className="gate-body">
+          {GATE_PARAGRAPHS.map((t) => (
+            <p key={t}>{t}</p>
+          ))}
+        </div>
         <button className="primary" onClick={accept}>
           はじめる
         </button>
