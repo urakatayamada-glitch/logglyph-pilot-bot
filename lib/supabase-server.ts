@@ -1,16 +1,34 @@
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 
 /**
- * Supabase の URL を正規化する。
+ * Supabase の URL を正規化して、ホスト部分だけを返す。
  *
- * 末尾に "/" が付いていると REST のパスが "//rest/v1/..." になり、
- * Supabase が "Invalid path specified in request URL" を返す。
- * 環境変数の設定ミスで起きやすいので、コード側で吸収する。
+ * supabase-js は渡された URL に "/rest/v1/..." を自分で付けるため、
+ * 環境変数に "/rest/v1" まで含まれていると二重になり、
+ * "Invalid path specified in request URL" で弾かれる。
+ * 末尾の "/" も同様に問題になるので、まとめて origin だけを取り出す。
  */
 function normalizeUrl(raw: string | undefined): string | undefined {
   if (!raw) return undefined;
-  const trimmed = raw.trim().replace(/\/+$/, "");
-  return trimmed || undefined;
+  const trimmed = raw.trim();
+  if (!trimmed) return undefined;
+  try {
+    return new URL(trimmed).origin;
+  } catch {
+    return trimmed.replace(/\/+$/, "") || undefined;
+  }
+}
+
+/** 環境変数に余計なパスが含まれていたかどうか（診断表示用） */
+function rawUrlHadPath(): boolean {
+  const raw = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
+  if (!raw) return false;
+  try {
+    const u = new URL(raw);
+    return u.pathname !== "/" && u.pathname !== "";
+  } catch {
+    return false;
+  }
 }
 
 export function getSupabaseUrl(): string | undefined {
@@ -67,9 +85,11 @@ export function describeSupabaseConfig() {
 
   return {
     url: getSupabaseUrl() ?? "(未設定)",
+    rawUrl: process.env.NEXT_PUBLIC_SUPABASE_URL?.trim() ?? "(未設定)",
     rawUrlHadTrailingSlash: Boolean(
       process.env.NEXT_PUBLIC_SUPABASE_URL?.trim().endsWith("/")
     ),
+    rawUrlHadPath: rawUrlHadPath(),
     keyKind,
     keyLength: key.length,
   };

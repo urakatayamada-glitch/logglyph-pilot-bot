@@ -129,11 +129,12 @@ export default async function AdminHome() {
               （<code>sb_secret_</code> で始まるもの）に差し替えてください。
             </p>
           )}
-          {config.rawUrlHadTrailingSlash && (
+          {(config.rawUrlHadPath || config.rawUrlHadTrailingSlash) && (
             <p>
-              NEXT_PUBLIC_SUPABASE_URL の末尾に <code>/</code>{" "}
-              が付いていました。コード側で除去して接続していますが、
-              環境変数からも外しておくことを推奨します。
+              NEXT_PUBLIC_SUPABASE_URL に余計な部分が含まれていました（設定値:{" "}
+              <code>{config.rawUrl}</code>）。コード側でホスト部分のみを使って接続しますが、
+              環境変数もプロジェクトURLだけ（<code>https://xxxx.supabase.co</code>）
+              にしておくことを推奨します。
             </p>
           )}
           <p>この状態では会話も記録されません。</p>

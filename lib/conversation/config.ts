@@ -7,7 +7,7 @@
  */
 
 /** Prompt / Conversation Engine のバージョン。prompt文言を変えたら必ず更新する。 */
-export const PROMPT_VERSION = "v1.2.0";
+export const PROMPT_VERSION = "v1.3.0";
 
 /**
  * 会話の長さに関する閾値（すべて「ユーザーの発話数」で数える）
@@ -40,8 +40,18 @@ export const RATE_LIMITS = {
 export const RECENT_EPISODE_MEMORY = 8;
 
 export const MODELS = {
-  /** 会話用 */
-  conversation: process.env.OPENAI_MODEL || "gpt-4o-mini",
+  /**
+   * 会話用。
+   *
+   * v1.3.0 で gpt-4o-mini から gpt-4o へ変更した。
+   * miniでは「質問を毎回しない」「一般論を述べない」「返事に困る発話をしない」
+   * といった否定形の指示を守りきれず、実機テストで毎ターン質問・感嘆符連発・
+   * 持論の開示が繰り返された。prompt側の強化では収束しなかったため。
+   *
+   * 環境変数 OPENAI_MODEL で上書きできるので、コストを抑えたい場合は
+   * gpt-4o-mini に戻せる（会話品質は落ちる）。
+   */
+  conversation: process.env.OPENAI_MODEL || "gpt-4o",
   /**
    * 構造化抽出用。1セッションに1回だけの呼び出しなので、
    * 会話用より上位のモデルを既定にしている（Memory Extraction Yieldが最重要指標のため）。
