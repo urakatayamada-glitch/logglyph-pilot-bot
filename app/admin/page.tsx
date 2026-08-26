@@ -226,13 +226,12 @@ export default async function AdminHome() {
       <div className="admin-note">
         <strong>Spontaneous Continuation Proxy は代理指標です。</strong>
         AIが質問しなかった発話の直後に、ユーザーが {SPONTANEOUS_MIN_CHARS}{" "}
-        文字以上を話した割合を数えています。
-        「記憶が実際に追加されたか」は機械判定できないため、発話量で近似したものです。
-        真に意味が追加されたことを保証しません。
+        文字以上を話した割合です。「記憶が実際に追加されたか」は機械判定できないため、
+        発話量で近似しています。真に意味が追加されたことは保証しません。
       </div>
 
       <h2>Level 2（Primary KPIではない）</h2>
-      <section className="stats">
+      <section className="stats compact">
         <Stat
           label="Hidden Candidate"
           value={pct(withHidden.length, rows.length)}
@@ -247,7 +246,7 @@ export default async function AdminHome() {
       </div>
 
       <h2>Diagnostic（成功判定には使わない）</h2>
-      <section className="stats">
+      <section className="stats compact">
         <Stat label="User / AI 文字比" value={charRatio} note="参考値" />
         <Stat
           label="平均ユーザー発話数"
