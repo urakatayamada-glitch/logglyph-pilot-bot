@@ -41,7 +41,11 @@ export async function POST(req: Request) {
           hidden_candidate_found: Boolean(structured?.hidden_candidate),
           one_line_memory: structured?.one_line_memory ?? null,
           structured_memory: structured ?? null,
-          memory_trigger_category: structured?.memory_trigger_category ?? undefined,
+          // memory_trigger_category は更新しない。
+          // セッション開始時にEpisode側のカテゴリ（固定の20分類）を入れており、
+          // 抽出モデルが返す自由記述（「仕事」「personal habits」等）で上書きすると
+          // 「どのEpisodeが記憶を引き出せたか」の集計が壊れる。
+          // 抽出側の分類は structured_memory の中に残っている。
         })
         .eq("session_id", sessionId);
       if (error) console.error("session complete update failed", error);
