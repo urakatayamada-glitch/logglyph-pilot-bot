@@ -9,9 +9,36 @@
 --    anonキーの権限は不要になります。
 --
 -- 実行タイミング：外部（Wave 0）配布の直前。
+--
+-- 【修正履歴】
+--   初版はポリシー名を "pilot can insert conversation logs" と
+--   決め打ちしていたが、実際の名前は v0 期に作られた
+--   "Allow anonymous conversation log inserts" だった。
+--   drop policy if exists は名前が一致しないと何もせずエラーも出さないため、
+--   実行しても anon の INSERT ポリシーが残ったままになっていた
+--   （実機で pg_policies を見て発覚）。
+--   名前に依存せず、anon / public 向けのポリシーを列挙して落とす形に変更した。
 -- ============================================================
 
-drop policy if exists "pilot can insert conversation logs" on public.conversation_logs;
+-- conversation_logs の anon / public 向けポリシーを名前に依らず全て削除する
+do $$
+declare
+  pol record;
+begin
+  for pol in
+    select policyname
+    from pg_policies
+    where schemaname = 'public'
+      and tablename = 'conversation_logs'
+      and (roles && array['anon', 'public']::name[])
+  loop
+    execute format(
+      'drop policy %I on public.conversation_logs',
+      pol.policyname
+    );
+    raise notice 'dropped policy: %', pol.policyname;
+  end loop;
+end $$;
 
 revoke insert on table public.conversation_logs from anon;
 
@@ -30,12 +57,27 @@ begin
   end if;
 end $$;
 
--- これで conversation_logs も anon からは一切触れなくなる
--- （ポリシーなし = 全拒否）。
-
--- 確認用：anon に対する conversation_logs の権限が 0 件になっていること
-select count(*) as anon_privileges_remaining
-from information_schema.role_table_grants
-where table_schema = 'public'
-  and table_name = 'conversation_logs'
-  and grantee = 'anon';
+-- ============================================================
+-- 確認用。以下がすべて満たされていれば締め直しは完了。
+--   ・RLS の3行がすべて true
+--   ・「ポリシー残:」の行が1行も出ない
+--   ・wave0_active が 10（0006 実行済みの場合）
+--
+-- テーブル権限（information_schema.role_table_grants）が anon に
+-- 残っていても、RLS 有効かつポリシー無し＝全拒否なので実害はない。
+-- 権限の数を数える検算は誤りだったため採用しない。
+-- ============================================================
+select 'RLS: ' || c.relname || ' = ' || c.relrowsecurity::text as check_result
+from pg_class c
+join pg_namespace n on n.oid = c.relnamespace
+where n.nspname = 'public'
+  and c.relkind = 'r'
+  and c.relname in ('conversation_logs', 'sessions', 'memory_trigger_episodes')
+union all
+select 'ポリシー残: ' || tablename || ' / ' || policyname || ' / ' || array_to_string(roles, ',')
+from pg_policies
+where schemaname = 'public'
+union all
+select 'wave0_active: ' || count(*)::text
+from public.memory_trigger_episodes
+where source_type = 'seed' and is_active = true;
