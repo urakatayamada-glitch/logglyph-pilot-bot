@@ -7,7 +7,7 @@
  */
 
 /** Prompt / Conversation Engine のバージョン。prompt文言を変えたら必ず更新する。 */
-export const PROMPT_VERSION = "v1.3.0";
+export const PROMPT_VERSION = "v1.3.1";
 
 /**
  * 会話の長さに関する閾値（すべて「ユーザーの発話数」で数える）
