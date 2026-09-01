@@ -57,6 +57,24 @@ function readLS<T>(key: string): T | null {
   }
 }
 
+/**
+ * 直近に出したEpisodeをCookieにも残す。
+ *
+ * localStorage だけだと、サーバーコンポーネント（app/page.tsx）が
+ * 初回表示のEpisodeを選ぶ時点で参照できず、除外が効かなかった。
+ * 実際 pickEpisode() は除外リスト無しで呼ばれており、
+ * 「前にも同じ話を聞かれた」が起きる原因になっていた。
+ * Cookieならサーバー側で読めるので、初回表示から除外できる。
+ */
+function writeRecentCookie(ids: string[]) {
+  try {
+    const v = ids.slice(0, RECENT_EPISODE_MEMORY).join(",");
+    document.cookie = `lg_recent=${encodeURIComponent(v)}; path=/; max-age=31536000; samesite=lax`;
+  } catch {
+    /* Cookieが使えなくても会話は続けられる */
+  }
+}
+
 function writeLS(key: string, value: unknown) {
   try {
     localStorage.setItem(key, JSON.stringify(value));
@@ -91,6 +109,8 @@ export default function Conversation({
    * キーが新規なので、Wave 0 の参加者にも必ず1回表示される（今回の狙い）。
    */
   const [introSeen, setIntroSeen] = useState(false);
+  /** 終了後の面（今日のログ・評価・Future Preview）へ自動で送るための目印 */
+  const completeRef = useRef<HTMLDivElement>(null);
   /** フッターから明示的に再生した場合。introSeen は書き換えない。 */
   const [introReplay, setIntroReplay] = useState(false);
   /** Future Preview 用。取得できなければ null のまま（表示を省く）。 */
@@ -137,13 +157,12 @@ export default function Conversation({
     }
 
     const recent = readLS<string[]>(LS_RECENT_EPISODES) ?? [];
-    writeLS(
-      LS_RECENT_EPISODES,
-      [episode.id, ...recent.filter((x) => x !== episode.id)].slice(
-        0,
-        RECENT_EPISODE_MEMORY
-      )
-    );
+    const nextRecent = [
+      episode.id,
+      ...recent.filter((x) => x !== episode.id),
+    ].slice(0, RECENT_EPISODE_MEMORY);
+    writeLS(LS_RECENT_EPISODES, nextRecent);
+    writeRecentCookie(nextRecent);
 
     void (async () => {
       try {
@@ -163,6 +182,21 @@ export default function Conversation({
       void saveLog(sessionId, "assistant", episode.body, 0);
     })();
   }, [ready, accepted, sessionId, episode]);
+
+  /**
+   * 会話が終わったら、締めの面が画面に入るところまで送る。
+   *
+   * MessageList の自動スクロールは最後の吹き出しまでしか送らないため、
+   * 「今日のログ」以降が画面の下に隠れたままになり、
+   * 見切れているように見えていた。
+   */
+  useEffect(() => {
+    if (!completed) return;
+    const t = setTimeout(() => {
+      completeRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 350);
+    return () => clearTimeout(t);
+  }, [completed]);
 
   /** 会話状態の永続化（リロード対策） */
   useEffect(() => {
@@ -326,7 +360,7 @@ export default function Conversation({
       {notice && <div className="notice warn">{notice}</div>}
 
       {completed ? (
-        <div className="complete-area">
+        <div className="complete-area" ref={completeRef}>
           <ConversationComplete
             oneLineMemory={oneLineMemory}
             onRate={rate}

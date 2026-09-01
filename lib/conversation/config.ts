@@ -36,8 +36,14 @@ export const RATE_LIMITS = {
   sessionsPerIpPerDay: 30,
 } as const;
 
-/** 直近この件数のEpisodeは再提示しない（同じ人が繰り返し試したときの重複回避） */
-export const RECENT_EPISODE_MEMORY = 8;
+/**
+ * 直近この件数のEpisodeは再提示しない。
+ *
+ * 8だと、5日×2回で同じ人に同じ話が回ってくる確率が高かった。
+ * 有効なEpisodeを増やすのに合わせて20へ。
+ * 「前にも同じ事聞かれた」は一度でやる気を削ぐので、ここは広く取る。
+ */
+export const RECENT_EPISODE_MEMORY = 20;
 
 export const MODELS = {
   /**

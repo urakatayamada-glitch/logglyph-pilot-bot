@@ -119,7 +119,19 @@ body::after{
   min-height:100dvh;
   display:flex;
   justify-content:center;
+  /* 既定の align-items:stretch だと、カードの高さが shell 側の高さに
+     引き伸ばされて固定され、中身がそれより高いときに overflow:hidden で
+     切れてしまう（会話終了後の面が実測で586px切れていた）。
+     flex-start にして、カードは自分の中身の高さを持てるようにする。
+     カード自身の min-height があるので、中身が短いときは画面いっぱいのまま。 */
+  align-items:flex-start;
+  /* iPhoneのホームインジケータやノッチの下に潜り込ませない。
+     safe-area を見ていないと、下端の要素が隠れて見切れる。 */
   padding:24px 14px;
+  padding-top:calc(24px + env(safe-area-inset-top, 0px));
+  padding-bottom:calc(24px + env(safe-area-inset-bottom, 0px));
+  padding-left:calc(14px + env(safe-area-inset-left, 0px));
+  padding-right:calc(14px + env(safe-area-inset-right, 0px));
 }
 
 /* 会話面：シアン → 中央クリームの放射グラデーション */
@@ -127,7 +139,9 @@ body::after{
   position:relative;
   width:min(720px,100%);
   min-height:calc(100vh - 48px);
-  min-height:calc(100dvh - 48px);
+  /* shell 側で safe-area のぶん余白を足したので、その分を引く。
+     引かないとカードが画面より高くなり、下端が隠れる。 */
+  min-height:calc(100dvh - 48px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
   display:flex;
   flex-direction:column;
   overflow:hidden;
@@ -276,7 +290,12 @@ footer{
 }
 
 /* ---------- conversation complete ---------- */
-.complete-area{border-top:1px solid var(--line);padding:20px 20px 24px}
+.complete-area{border-top:1px solid var(--line);padding:20px 20px 32px}
+
+/* 会話が終わったら、カードは中身の高さになりページ全体でスクロールする。
+   入力欄が無くなるので下端に固定しておくものが無く、
+   ページごとスクロールする方が指の動きが素直になる。 */
+.card:has(.complete-area){min-height:0}
 
 /* 今日のログ：中央のクリームを一段強めて、感情の着地点にする */
 .memory-card{
