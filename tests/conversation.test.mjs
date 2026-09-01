@@ -115,45 +115,129 @@ test("集計：発話数と文字数", () => {
   assert.equal(s.aiCharCount, 4);
 });
 
-// ---- 質問の連続禁止（v1.4.0：コード側で強制する） ----
-function lastAssistantAskedQuestion(messages) {
+// ---- 質問のガード（v1.5.1：Deep Dive を潰さない形に作り直した） ----
+/*
+ * v1.5.0 までの判定は「直前のAI発話に？が含まれるか」だけだった。
+ * Episodeの結びは必ず「〜ある？」で終わるため、AIは1回目の応答で
+ * 必ず質問を禁止されていた。平均往復数が2.4なので、多くの会話で
+ * AIは一度も質問できないまま終わっていた。
+ */
+const MAX_CONSECUTIVE_QUESTIONS = 2;
+
+function isThinAgreement(text) {
+  const t = text.trim();
+  if (t.length > 10) return false;
+  return /^(うん+|ええ|はい|そう(だね|ですね|そう)?|わかる|分かる|確かに|たしかに|なるほど|そっか|そうかも|だね|ですね|了解|オーケー|オッケー|ok|OK|w+|笑)[。、．，！!？?\s]*$/.test(t);
+}
+
+function userAddedMaterial(messages) {
   for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i].role !== "assistant") continue;
-    const t = messages[i].content;
-    return t.includes("？") || t.includes("?");
+    if (messages[i].role !== "user") continue;
+    const t = messages[i].content.trim();
+    return t.length >= 6 && !isThinAgreement(t);
   }
   return false;
 }
 
-test("直前のAI発話が質問なら、次のターンは質問を禁止する", () => {
-  assert.equal(
-    lastAssistantAskedQuestion([
-      { role: "assistant", content: "それ、いつ頃の話？" },
-      { role: "user", content: "学生のとき" },
-    ]),
-    true
-  );
+function trailingAssistantQuestionTurns(messages) {
+  const firstAssistant = messages.findIndex((m) => m.role === "assistant");
+  let count = 0;
+  for (let i = messages.length - 1; i > firstAssistant; i--) {
+    if (messages[i].role !== "assistant") continue;
+    const t = messages[i].content;
+    if (t.includes("？") || t.includes("?")) count += 1;
+    else break;
+  }
+  return count;
+}
+
+function shouldBlockQuestion(messages) {
+  const trailing = trailingAssistantQuestionTurns(messages);
+  if (trailing === 0) return false;
+  if (trailing >= MAX_CONSECUTIVE_QUESTIONS) return true;
+  return !userAddedMaterial(messages);
+}
+
+const EPISODE = {
+  role: "assistant",
+  content:
+    "こんな話を聞いてさ。昔は朝まで遊べたのに、最近は二十三時で眠くなる人がいるって。最近、自分が変わったなと思うことある？",
+};
+
+test("冒頭Episodeの「？」でAIの1回目の質問を潰さない（v1.5.0のバグ）", () => {
+  const msgs = [
+    EPISODE,
+    { role: "user", content: "ある。マジで徹夜すると翌日に響く。昔のようにはいかない。" },
+  ];
+  assert.equal(trailingAssistantQuestionTurns(msgs), 0, "Episodeは数えない");
+  assert.equal(shouldBlockQuestion(msgs), false, "1回目は質問できなければならない");
 });
 
-test("直前のAI発話が質問でなければ制約はかからない", () => {
-  assert.equal(
-    lastAssistantAskedQuestion([
-      { role: "assistant", content: "それ、いつ頃の話？" },
-      { role: "user", content: "学生のとき" },
-      { role: "assistant", content: "学生のときなんだ。" },
-      { role: "user", content: "うん" },
-    ]),
-    false
-  );
+test("材料が出ている間は、続けて質問してよい（Deep Dive）", () => {
+  const msgs = [
+    EPISODE,
+    { role: "user", content: "わかる。徹夜すると翌日に響く。" },
+    { role: "assistant", content: "昔って、最高どれくらい起きてられた？" },
+    { role: "user", content: "25〜26時間かな。そのまま仕事行ったりしてた。" },
+  ];
+  assert.equal(trailingAssistantQuestionTurns(msgs), 1);
+  assert.equal(shouldBlockQuestion(msgs), false);
+});
+
+test("3回続けては聞けない（尋問に戻らない）", () => {
+  const msgs = [
+    EPISODE,
+    { role: "user", content: "わかる。徹夜すると翌日に響く。" },
+    { role: "assistant", content: "昔って、最高どれくらい起きてられた？" },
+    { role: "user", content: "25〜26時間かな。そのまま仕事行ったりしてた。" },
+    { role: "assistant", content: "え、その間ずっと何してたの？" },
+    { role: "user", content: "友達と朝5時まで飲んで、そのまま仕事行ってた。" },
+  ];
+  assert.equal(trailingAssistantQuestionTurns(msgs), 2);
+  assert.equal(shouldBlockQuestion(msgs), true, "2回聞いたら止める");
+});
+
+test("相槌しか返っていないなら、質問を重ねない", () => {
+  const msgs = [
+    EPISODE,
+    { role: "user", content: "ある。徹夜すると翌日に響く。" },
+    { role: "assistant", content: "昔って、最高どれくらい起きてられた？" },
+    { role: "user", content: "うん" },
+  ];
+  assert.equal(shouldBlockQuestion(msgs), true);
+});
+
+test("質問しないターンのあとは、また質問できる", () => {
+  const msgs = [
+    EPISODE,
+    { role: "user", content: "ある。徹夜すると翌日に響く。" },
+    { role: "assistant", content: "徹夜が響くようになったんだね。" },
+    { role: "user", content: "そうそう、昔は平気だったのに。" },
+  ];
+  assert.equal(trailingAssistantQuestionTurns(msgs), 0);
+  assert.equal(shouldBlockQuestion(msgs), false);
+});
+
+test("相槌の判定：新しい材料を含むものは相槌ではない", () => {
+  assert.equal(isThinAgreement("うん"), true);
+  assert.equal(isThinAgreement("そうだね。"), true);
+  assert.equal(isThinAgreement("わかる"), true);
+  assert.equal(isThinAgreement("確かに！"), true);
+  assert.equal(isThinAgreement("うん、朝5時まで飲んでた"), false);
+  assert.equal(isThinAgreement("25時間くらいかな"), false);
 });
 
 test("AI発話がまだ無ければ制約はかからない", () => {
-  assert.equal(lastAssistantAskedQuestion([{ role: "user", content: "あ" }]), false);
+  assert.equal(shouldBlockQuestion([{ role: "user", content: "あ" }]), false);
 });
 
-test("半角の疑問符でも判定する", () => {
-  assert.equal(
-    lastAssistantAskedQuestion([{ role: "assistant", content: "when?" }]),
-    true
-  );
+test("半角の疑問符でも数える", () => {
+  const msgs = [
+    EPISODE,
+    { role: "user", content: "ある。徹夜すると響く。" },
+    { role: "assistant", content: "how long?" },
+    { role: "user", content: "うん" },
+  ];
+  assert.equal(trailingAssistantQuestionTurns(msgs), 1);
+  assert.equal(shouldBlockQuestion(msgs), true, "相槌なので止める");
 });

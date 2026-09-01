@@ -5,8 +5,8 @@ import {
   ConversationPhase,
   canAiChooseToClose,
   countUserMessages,
-  lastAssistantAskedQuestion,
   resolvePhase,
+  shouldBlockQuestion,
 } from "./phase";
 import { BASE_PROMPT } from "./prompts/base";
 import {
@@ -109,7 +109,7 @@ export async function runTurn(
 
   const userCount = countUserMessages(messages);
   const phase = resolvePhase(userCount);
-  const noQuestion = lastAssistantAskedQuestion(messages);
+  const noQuestion = shouldBlockQuestion(messages);
 
   const request: OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming = {
     model: MODELS.conversation,
