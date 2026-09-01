@@ -30,8 +30,17 @@ interface SessionRow {
   one_line_memory: string | null;
   user_rating: number | null;
   wants_to_talk_again: boolean | null;
+  followup_answers: Record<string, number> | null;
   moderation_flag_count: number;
 }
+
+/** Wave 1（v1.5.0）で Future Preview のあとに聞く4問 */
+const FOLLOWUP_QUESTIONS: { key: string; label: string }[] = [
+  { key: "future_curiosity", label: "この先が気になった" },
+  { key: "want_to_accumulate", label: "記録を貯めたい" },
+  { key: "want_five_day_insight", label: "5日後を見たい" },
+  { key: "understood_continuation_value", label: "続ける意味が分かった" },
+];
 
 function pct(n: number, d: number) {
   if (!d) return "—";
@@ -53,8 +62,13 @@ function avg(values: number[]) {
   return (values.reduce((a, b) => a + b, 0) / values.length).toFixed(1);
 }
 
-export default async function AdminHome() {
+export default async function AdminHome({
+  searchParams,
+}: {
+  searchParams: Promise<{ v?: string }>;
+}) {
   await requireAdmin();
+  const { v: versionParam } = await searchParams;
 
   if (!isAdminConfigured()) {
     return (
@@ -79,7 +93,28 @@ export default async function AdminHome() {
       .select("id", { count: "exact", head: true }),
   ]);
 
-  const rows = (data ?? []) as SessionRow[];
+  const allRows = (data ?? []) as SessionRow[];
+
+  /*
+   * prompt_version の絞り込み（Wave 1 で追加）。
+   * Wave 0（v1.4.0）と Wave 1（v1.5.0）が混ざると Primary KPI が読めなくなる。
+   * 既定は「最新の版」。件数が小さいので、全件取得してから絞っている。
+   */
+  const versions = Array.from(
+    new Set(allRows.map((r) => r.prompt_version).filter(Boolean) as string[])
+  ).sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
+  const latestVersion = versions[0] ?? null;
+  const selectedVersion =
+    versionParam === "all"
+      ? "all"
+      : versionParam && versions.includes(versionParam)
+        ? versionParam
+        : latestVersion;
+
+  const rows =
+    selectedVersion && selectedVersion !== "all"
+      ? allRows.filter((r) => r.prompt_version === selectedVersion)
+      : allRows;
 
   /**
    * キーの取り違えを検出する。
@@ -133,6 +168,21 @@ export default async function AdminHome() {
         )}%`
       : "—";
 
+  // Wave 1 追加設問（Future Preview のあとに聞いた4問）の平均
+  const followupRows = rows.filter((r) => r.followup_answers != null);
+  const followupAvg = FOLLOWUP_QUESTIONS.map((q) => {
+    const values = followupRows
+      .map((r) => r.followup_answers?.[q.key])
+      .filter((v): v is number => typeof v === "number");
+    return {
+      ...q,
+      answered: values.length,
+      avg: values.length
+        ? values.reduce((a, b) => a + b, 0) / values.length
+        : null,
+    };
+  });
+
   // カテゴリ別の成績（どのEpisodeが記憶を引き出せたか）
   const byCategory = new Map<string, { total: number; found: number }>();
   for (const r of rows) {
@@ -148,6 +198,32 @@ export default async function AdminHome() {
       <div className="admin-head">
         <h1>LOGGLYPH ADMIN</h1>
         <span className="admin-sub">Pilot Observability</span>
+        <span className="admin-now">
+          現在表示：{selectedVersion === "all" ? "All" : (selectedVersion ?? "—")}
+          <em>{rows.length} / {allRows.length} セッション</em>
+        </span>
+      </div>
+
+      {/*
+        Wave 0（v1.4.0）と Wave 1（v1.5.0）が混ざると Primary KPI が読めない。
+        既定は最新の版だけを表示する。
+      */}
+      <div className="admin-filter">
+        {versions.map((v) => (
+          <Link
+            key={v}
+            href={`/admin?v=${encodeURIComponent(v)}`}
+            className={selectedVersion === v ? "vchip on" : "vchip"}
+          >
+            {v}
+          </Link>
+        ))}
+        <Link
+          href="/admin?v=all"
+          className={selectedVersion === "all" ? "vchip on" : "vchip"}
+        >
+          All
+        </Link>
       </div>
 
       {(keyLooksWrong || error) && (
@@ -229,6 +305,28 @@ export default async function AdminHome() {
         文字以上を話した割合です。「記憶が実際に追加されたか」は機械判定できないため、
         発話量で近似しています。真に意味が追加されたことは保証しません。
       </div>
+
+      {followupRows.length > 0 && (
+        <>
+          <h2>Wave 1 追加設問（Future Preview を見たあと）</h2>
+          <section className="stats compact">
+            {followupAvg.map((q) => (
+              <Stat
+                key={q.key}
+                label={q.label}
+                value={num(q.avg, 2)}
+                note={`${q.answered} 件回答 ／ 5点満点`}
+              />
+            ))}
+          </section>
+          <div className="admin-note">
+            これは <strong>Future Preview を見たあと</strong>の回答です。
+            上の「また話したい」は Preview を見る<strong>前</strong>に取っており、
+            Wave 0 と同条件です。会話そのものの引き（前者）と、
+            提示した未来による期待（後者）を分けて読んでください。
+          </div>
+        </>
+      )}
 
       <h2>Level 2（Primary KPIではない）</h2>
       <section className="stats compact">

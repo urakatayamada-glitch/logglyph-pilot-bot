@@ -24,7 +24,6 @@ export default async function Home() {
           </div>
         </header>
         <Conversation episode={episode} />
-        <footer>LOGGLYPH PILOT</footer>
       </section>
     </main>
   );

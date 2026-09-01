@@ -16,6 +16,9 @@ export async function POST(req: Request) {
     const sessionId: string | undefined = body?.sessionId;
     const messages: ChatMessage[] = Array.isArray(body?.messages) ? body.messages : [];
     const crisis: boolean = Boolean(body?.crisis);
+    // Future Preview 用。この端末の蓄積を数えるためだけに使う。
+    const clientToken: string | undefined =
+      typeof body?.clientToken === "string" ? body.clientToken : undefined;
 
     if (!sessionId) return NextResponse.json({ ok: false }, { status: 400 });
 
@@ -51,10 +54,41 @@ export async function POST(req: Request) {
       if (error) console.error("session complete update failed", error);
     }
 
+    // Future Preview 用の蓄積。今回のセッションを更新した「あと」に数える。
+    // 失敗しても終了体験は壊さないので、握りつぶして null を返す。
+    let memoryCount: number | null = null;
+    let recentMemories: string[] = [];
+    if (supabase && clientToken && !crisis) {
+      try {
+        const { count } = await supabase
+          .from("sessions")
+          .select("session_id", { count: "exact", head: true })
+          .eq("client_token", clientToken)
+          .eq("memory_found", true);
+        memoryCount = count ?? 0;
+
+        const { data: recent } = await supabase
+          .from("sessions")
+          .select("one_line_memory")
+          .eq("client_token", clientToken)
+          .eq("memory_found", true)
+          .not("one_line_memory", "is", null)
+          .order("started_at", { ascending: false })
+          .limit(3);
+        recentMemories = (recent ?? [])
+          .map((r) => (r as { one_line_memory: string }).one_line_memory)
+          .filter((t) => typeof t === "string" && t.trim().length > 0);
+      } catch (error) {
+        console.error("accumulation fetch failed", error);
+      }
+    }
+
     return NextResponse.json({
       ok: true,
       oneLineMemory: structured?.one_line_memory ?? null,
       memoryFound: structured?.memory_found ?? false,
+      memoryCount,
+      recentMemories,
     });
   } catch (error) {
     console.error("session complete failed", error);

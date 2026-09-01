@@ -4,12 +4,15 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import MessageList from "./MessageList";
 import Composer from "./Composer";
 import ConversationComplete from "./ConversationComplete";
+import Intro from "./Intro";
+import type { Wave1Answers } from "./Wave1Survey";
 import type { ChatMessage } from "../lib/conversation/phase";
 import type { MemoryTriggerEpisode } from "../lib/episodes";
 import { RECENT_EPISODE_MEMORY } from "../lib/conversation/config";
 
 const LS_SESSION = "logglyph.session";
 const LS_ACCEPTED = "logglyph.accepted";
+const LS_INTRO_SEEN = "logglyph.introSeen";
 const LS_CLIENT = "logglyph.client";
 const LS_RECENT_EPISODES = "logglyph.recentEpisodes";
 
@@ -83,16 +86,28 @@ export default function Conversation({
    * 「また話したい」の観測対象である再訪に余計な摩擦が入るため。
    */
   const [accepted, setAccepted] = useState(false);
+  /**
+   * 導入を見たか。端末ごとに1回だけ自動表示する。
+   * キーが新規なので、Wave 0 の参加者にも必ず1回表示される（今回の狙い）。
+   */
+  const [introSeen, setIntroSeen] = useState(false);
+  /** フッターから明示的に再生した場合。introSeen は書き換えない。 */
+  const [introReplay, setIntroReplay] = useState(false);
+  /** Future Preview 用。取得できなければ null のまま（表示を省く）。 */
+  const [memoryCount, setMemoryCount] = useState<number | null>(null);
+  const [recentMemories, setRecentMemories] = useState<string[]>([]);
   const startedRef = useRef(false);
 
   /** 初期化：前回の会話があれば復元、なければEpisodeで開始 */
   useEffect(() => {
     const saved = readLS<PersistedSession>(LS_SESSION);
     if (readLS<boolean>(LS_ACCEPTED) === true) setAccepted(true);
+    if (readLS<boolean>(LS_INTRO_SEEN) === true) setIntroSeen(true);
 
     if (saved?.sessionId && saved.messages?.length) {
-      // 進行中の会話が復元できる時点で、すでに同意している
+      // 進行中の会話が復元できる時点で、すでに同意も導入も済んでいる
       setAccepted(true);
+      setIntroSeen(true);
       setSessionId(saved.sessionId);
       setMessages(saved.messages);
       setCompleted(saved.completed);
@@ -171,10 +186,15 @@ export default function Conversation({
             sessionId,
             messages: finalMessages,
             crisis: isCrisis,
+            // Future Preview 用。この端末の蓄積を数えるためだけに使う。
+            clientToken: readLS<string>(LS_CLIENT),
           }),
         });
         const data = await res.json();
         if (data?.oneLineMemory) setOneLineMemory(data.oneLineMemory);
+        // 取得できなければ null のまま。件数を出さずに続行する。
+        if (typeof data?.memoryCount === "number") setMemoryCount(data.memoryCount);
+        if (Array.isArray(data?.recentMemories)) setRecentMemories(data.recentMemories);
       } catch {
         /* 抽出に失敗しても終了体験は壊さない */
       }
@@ -235,6 +255,25 @@ export default function Conversation({
     [sessionId]
   );
 
+  /** Future Preview のあとの4問。任意回答なので null でも呼ぶ。 */
+  const sendFollowup = useCallback(
+    (answers: Wave1Answers | null) => {
+      if (!answers) return;
+      void fetch("/api/session/rating", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId, followupAnswers: answers }),
+      }).catch(() => {});
+    },
+    [sessionId]
+  );
+
+  const finishIntro = useCallback(() => {
+    writeLS(LS_INTRO_SEEN, true);
+    setIntroSeen(true);
+    setIntroReplay(false);
+  }, []);
+
   const accept = useCallback(() => {
     writeLS(LS_ACCEPTED, true);
     setAccepted(true);
@@ -253,18 +292,30 @@ export default function Conversation({
     return <div className="chat" />;
   }
 
+  if (!introSeen || introReplay) {
+    return (
+      <>
+        <Intro onDone={finishIntro} />
+        <AboutFooter onClick={() => setIntroReplay(true)} />
+      </>
+    );
+  }
+
   if (!accepted) {
     return (
-      <div className="gate">
-        <div className="gate-body">
-          {GATE_PARAGRAPHS.map((t) => (
-            <p key={t}>{t}</p>
-          ))}
+      <>
+        <div className="gate">
+          <div className="gate-body">
+            {GATE_PARAGRAPHS.map((t) => (
+              <p key={t}>{t}</p>
+            ))}
+          </div>
+          <button className="primary" onClick={accept}>
+            はじめる
+          </button>
         </div>
-        <button className="primary" onClick={accept}>
-          はじめる
-        </button>
-      </div>
+        <AboutFooter onClick={() => setIntroReplay(true)} />
+      </>
     );
   }
 
@@ -279,13 +330,18 @@ export default function Conversation({
           <ConversationComplete
             oneLineMemory={oneLineMemory}
             onRate={rate}
+            onFollowup={sendFollowup}
             crisis={crisis}
+            memoryCount={memoryCount}
+            recentMemories={recentMemories}
+            restartSlot={
+              crisis ? null : (
+                <button className="ghost restart" onClick={restart}>
+                  別の話をする
+                </button>
+              )
+            }
           />
-          {!crisis && (
-            <button className="ghost restart" onClick={restart}>
-              別の話をする
-            </button>
-          )}
         </div>
       ) : (
         <Composer
@@ -295,7 +351,25 @@ export default function Conversation({
           disabled={loading}
         />
       )}
+
+      <AboutFooter onClick={() => setIntroReplay(true)} />
     </>
+  );
+}
+
+/**
+ * 常設の「LOGGLYPHとは」。
+ *
+ * 新しいボタンを増やすと入り口の静けさが壊れるので、
+ * これまでフッターに置いていた文字をそのまま押せるようにしただけ。
+ */
+function AboutFooter({ onClick }: { onClick: () => void }) {
+  return (
+    <footer>
+      <button className="about-link" onClick={onClick}>
+        LOGGLYPHとは
+      </button>
+    </footer>
   );
 }
 
