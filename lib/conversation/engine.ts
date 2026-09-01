@@ -7,9 +7,11 @@ import {
   countUserMessages,
   resolvePhase,
   shouldBlockQuestion,
+  userAddedMaterial,
 } from "./phase";
 import { BASE_PROMPT } from "./prompts/base";
 import {
+  CLOSING_AFTER_MEMORY,
   CLOSING_PROMPT,
   EXPLORING_PROMPT,
   NO_QUESTION_THIS_TURN,
@@ -44,11 +46,18 @@ function phaseInstruction(phase: ConversationPhase): string {
 
 export function buildSystemPrompt(
   phase: ConversationPhase,
-  opts: { sensitive?: boolean; noQuestion?: boolean } = {}
+  opts: {
+    sensitive?: boolean;
+    noQuestion?: boolean;
+    /** 直前に具体的な場面が語られたか（CLOSING でのみ使う） */
+    receivedMemory?: boolean;
+  } = {}
 ): string {
   const parts = [BASE_PROMPT, phaseInstruction(phase)];
   // 質問の連続を、promptのお願いではなくサーバー側の判定で止める
   if (opts.noQuestion && phase !== "CLOSING") parts.push(NO_QUESTION_THIS_TURN);
+  // 記憶が出た瞬間に回収して立ち去る終わり方を防ぐ
+  if (phase === "CLOSING" && opts.receivedMemory) parts.push(CLOSING_AFTER_MEMORY);
   if (opts.sensitive) parts.push(SENSITIVE_TOPIC_PROMPT);
   return parts.join("\n\n---\n\n");
 }
@@ -117,7 +126,11 @@ export async function runTurn(
     messages: [
       {
         role: "system",
-        content: buildSystemPrompt(phase, { ...opts, noQuestion }),
+        content: buildSystemPrompt(phase, {
+          ...opts,
+          noQuestion,
+          receivedMemory: userAddedMaterial(messages),
+        }),
       },
       ...messages.map((m) => ({ role: m.role, content: m.content })),
     ],
@@ -141,7 +154,13 @@ export async function runTurn(
       model: MODELS.conversation,
       temperature: 0.7,
       messages: [
-        { role: "system", content: buildSystemPrompt("CLOSING", opts) },
+        {
+          role: "system",
+          content: buildSystemPrompt("CLOSING", {
+            ...opts,
+            receivedMemory: userAddedMaterial(messages),
+          }),
+        },
         ...messages.map((m) => ({ role: m.role, content: m.content })),
       ],
     });

@@ -241,3 +241,29 @@ test("半角の疑問符でも数える", () => {
   assert.equal(trailingAssistantQuestionTurns(msgs), 1);
   assert.equal(shouldBlockQuestion(msgs), true, "相槌なので止める");
 });
+
+// ---- 記憶が出た直後の締めに、受け取りの指示が入るか（v1.5.1） ----
+/*
+ * 「記憶が出た瞬間に回収して終わる」体験を防ぐための判定。
+ * 直前のユーザー発話が材料を含んでいれば、CLOSING に
+ * 「まず受け取ってから終える」指示を足す。
+ */
+test("具体的な場面が語られた直後の締めでは、受け取りの指示を足す", () => {
+  const msgs = [
+    EPISODE,
+    { role: "user", content: "わかる。徹夜すると翌日に響く。" },
+    { role: "assistant", content: "昔って、最高どれくらい起きてられた？" },
+    { role: "user", content: "友達と朝5時まで飲んで、そのまま仕事行ってた。" },
+  ];
+  assert.equal(userAddedMaterial(msgs), true, "受け取りの指示が入る条件");
+});
+
+test("相槌で終わる会話では、受け取りの指示は足さない", () => {
+  const msgs = [
+    EPISODE,
+    { role: "user", content: "特にないかな。" },
+    { role: "assistant", content: "そっか。何も出てこない日もあるしね。" },
+    { role: "user", content: "うん" },
+  ];
+  assert.equal(userAddedMaterial(msgs), false, "受け取る具体物が無い");
+});
