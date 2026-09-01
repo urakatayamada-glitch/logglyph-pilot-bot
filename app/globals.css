@@ -254,13 +254,21 @@ header p{margin:5px 0 0;color:var(--ink-faint);font-size:9.5px;letter-spacing:.1
 }
 .composer textarea{
   flex:1;resize:none;
+  /* flexアイテムは既定で中身の幅より縮まない。
+     0を許可しないと、textareaが押し広げて「送る」が画面外へ出る。 */
+  min-width:0;
   min-height:52px;max-height:130px;
   border-radius:16px;
   border:1px solid rgba(255,255,255,.9);
   background:rgba(255,255,255,.78);
   color:var(--ink);
   padding:15px 16px;
-  font:inherit;font-size:14.5px;line-height:1.6;
+  /* ⚠ 16px より小さくしないこと。
+     iOS Safari は font-size が16px未満の入力欄にフォーカスすると
+     ページ全体を自動でズームする。その結果カードが画面幅より広くなり、
+     「送る」ボタンが右にはみ出して見切れていた。
+     見た目の都合で 14.5px に戻さないこと。 */
+  font:inherit;font-size:16px;line-height:1.6;
   outline:none;
   transition:background .2s,box-shadow .2s;
 }
@@ -271,8 +279,10 @@ header p{margin:5px 0 0;color:var(--ink-faint);font-size:9.5px;letter-spacing:.1
 }
 .composer textarea:disabled{opacity:.45}
 .composer button{
+  /* 入力が長くなっても縮ませない・折り返させない */
+  flex:0 0 auto;white-space:nowrap;
   border:1px solid rgba(255,255,255,.8);
-  border-radius:16px;padding:0 22px;
+  border-radius:16px;padding:0 20px;
   background:rgba(255,255,255,.9);
   color:#46525f;font:inherit;font-weight:700;font-size:13.5px;
   cursor:pointer;
@@ -481,6 +491,8 @@ button.ghost.restart{margin-top:18px}
   border:1px solid rgba(255,255,255,.9);
   background:rgba(255,255,255,.8);
   color:var(--ink);padding:14px;font:inherit;outline:none;
+  /* 上と同じ理由。iOSの自動ズームを避ける */
+  font-size:16px;
 }
 .admin-login input:focus{background:#fff;box-shadow:0 0 0 3px rgba(255,255,255,.5)}
 .admin-login button{
