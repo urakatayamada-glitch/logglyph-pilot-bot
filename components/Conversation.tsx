@@ -5,6 +5,7 @@ import MessageList from "./MessageList";
 import Composer from "./Composer";
 import ConversationComplete from "./ConversationComplete";
 import Intro from "./Intro";
+import DeleteRecords from "./DeleteRecords";
 import type { Wave1Answers } from "./Wave1Survey";
 import type { ChatMessage } from "../lib/conversation/phase";
 import type { MemoryTriggerEpisode } from "../lib/episodes";
@@ -15,6 +16,13 @@ const LS_ACCEPTED = "logglyph.accepted";
 const LS_INTRO_SEEN = "logglyph.introSeen";
 const LS_CLIENT = "logglyph.client";
 const LS_RECENT_EPISODES = "logglyph.recentEpisodes";
+/**
+ * 流入識別。?src=note_wave2 を最初の到達時に保存する。
+ *
+ * URLから消えても（画面遷移・リロード）コホートを見失わないように端末側に残す。
+ * 知人コホートは null のまま。
+ */
+const LS_SRC = "logglyph.src";
 
 /**
  * 会話開始前に一度だけ表示する注意文言。
@@ -39,6 +47,56 @@ interface PersistedSession {
   completed: boolean;
   oneLineMemory: string | null;
   crisis: boolean;
+}
+
+/** URLの ?src= を読み、なければ保存済みの値を返す */
+function readSrc(): string | null {
+  try {
+    const fromUrl = new URLSearchParams(window.location.search).get("src");
+    if (fromUrl && fromUrl.trim()) {
+      const v = fromUrl.trim().slice(0, 64);
+      writeLS(LS_SRC, v);
+      return v;
+    }
+    return readLS<string>(LS_SRC);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Stage 1 : Entry Pull の分母を記録する。
+ *
+ * これまでは「はじめる」を押すまでサーバーに何も送っていなかったため、
+ * 画面を読んで帰った人がデータに一切現れず、Entry Pull を一度も実測できていなかった。
+ * ⚠ ここでは OpenAI を呼ばない。API費用はゼロ。
+ */
+function recordEntry(stage: "view" | "accept", clientToken: string, src: string | null) {
+  try {
+    void fetch("/api/entry", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      keepalive: true,
+      body: JSON.stringify({
+        clientToken,
+        stage,
+        src,
+        referrer: typeof document !== "undefined" ? document.referrer || null : null,
+      }),
+    }).catch(() => undefined);
+  } catch {
+    /* 記録に失敗しても体験は壊さない */
+  }
+}
+
+/** client_token を読み、無ければ作って保存する */
+function ensureClientToken(): string {
+  let token = readLS<string>(LS_CLIENT);
+  if (!token) {
+    token = makeId();
+    writeLS(LS_CLIENT, token);
+  }
+  return token;
 }
 
 function makeId() {
@@ -117,10 +175,21 @@ export default function Conversation({
   const [memoryCount, setMemoryCount] = useState<number | null>(null);
   const [recentMemories, setRecentMemories] = useState<string[]>([]);
   const startedRef = useRef(false);
+  /** 流入識別。到達時に確定し、セッション登録まで持ち回る。 */
+  const srcRef = useRef<string | null>(null);
 
   /** 初期化：前回の会話があれば復元、なければEpisodeで開始 */
   useEffect(() => {
     const saved = readLS<PersistedSession>(LS_SESSION);
+
+    /*
+     * 到達を1回だけ記録する。同意より前・会話より前の時点。
+     * 同一端末・同一日はサーバー側の unique index で1行に集約される。
+     */
+    const src = readSrc();
+    srcRef.current = src;
+    recordEntry("view", ensureClientToken(), src);
+
     if (readLS<boolean>(LS_ACCEPTED) === true) setAccepted(true);
     if (readLS<boolean>(LS_INTRO_SEEN) === true) setIntroSeen(true);
 
@@ -150,11 +219,7 @@ export default function Conversation({
     if (!ready || !accepted || !sessionId || startedRef.current) return;
     startedRef.current = true;
 
-    let clientToken = readLS<string>(LS_CLIENT);
-    if (!clientToken) {
-      clientToken = makeId();
-      writeLS(LS_CLIENT, clientToken);
-    }
+    const clientToken = ensureClientToken();
 
     const recent = readLS<string[]>(LS_RECENT_EPISODES) ?? [];
     const nextRecent = [
@@ -169,7 +234,7 @@ export default function Conversation({
         const res = await fetch("/api/session", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ sessionId, clientToken, episode }),
+          body: JSON.stringify({ sessionId, clientToken, episode, src: srcRef.current }),
         });
         if (res.status === 429) {
           const data = await res.json();
@@ -311,6 +376,8 @@ export default function Conversation({
   const accept = useCallback(() => {
     writeLS(LS_ACCEPTED, true);
     setAccepted(true);
+    // 注意書きに同意した時点を記録する（到達 → 同意 → 会話開始 の中段）
+    recordEntry("accept", ensureClientToken(), srcRef.current);
   }, []);
 
   const restart = useCallback(() => {
@@ -347,6 +414,19 @@ export default function Conversation({
           <button className="primary" onClick={accept}>
             はじめる
           </button>
+          {/*
+            Product Decision（Wave 2 設計合意 §7）:
+            削除の扱いを、始める前に読める位置へ置く。
+            文言は指定のものをそのまま使う（留保表現も変えない）。
+          */}
+          <div className="gate-fine">
+            <p>
+              あとから会話内容を削除できます。削除すると会話内容はすべて消えます。利用回数や記憶が見つかったか等の匿名集計値だけ、どなたの記録か分からない形で残る場合があります。
+            </p>
+            <p>
+              ブラウザのデータを削除すると、この端末を識別する情報も消えるため、あとから削除操作ができなくなる場合があります。
+            </p>
+          </div>
         </div>
         <AboutFooter onClick={() => setIntroReplay(true)} />
       </>
@@ -386,7 +466,7 @@ export default function Conversation({
         />
       )}
 
-      <AboutFooter onClick={() => setIntroReplay(true)} />
+      <AboutFooter onClick={() => setIntroReplay(true)} showDelete />
     </>
   );
 }
@@ -397,12 +477,32 @@ export default function Conversation({
  * 新しいボタンを増やすと入り口の静けさが壊れるので、
  * これまでフッターに置いていた文字をそのまま押せるようにしただけ。
  */
-function AboutFooter({ onClick }: { onClick: () => void }) {
+/**
+ * 常設フッター。
+ *
+ * showDelete は「同意して会話に入ったあと」だけ true にする。
+ * 導入・注意書きの面ではまだ消すものが存在せず、最初に目に入る面に
+ * 削除リンクを置くと入り口の静けさが壊れる。
+ * その2面では注意書き（gate-fine）が削除の扱いを説明している。
+ */
+function AboutFooter({
+  onClick,
+  showDelete = false,
+}: {
+  onClick: () => void;
+  showDelete?: boolean;
+}) {
   return (
-    <footer>
+    <footer className="site-foot">
       <button className="about-link" onClick={onClick}>
         LOGGLYPHとは
       </button>
+      {/*
+        削除は不特定多数公開の前提条件（Safety / Trust 要件）。
+        知人コホートには /found から辿れるが、Wave 2 の参加者は /found の
+        案内を受け取らないため、本体側にも常設の入口が必要。
+      */}
+      {showDelete && <DeleteRecords />}
     </footer>
   );
 }

@@ -37,6 +37,50 @@ export const RATE_LIMITS = {
 } as const;
 
 /**
+ * Wave 2（Controlled Open Pilot）の上限。
+ *
+ * 「先着30名」と「日次30件」は別の仕組みなので混ぜない。
+ *   cohortTotalSessions   … コホートの定義そのもの。達したら受付終了
+ *   cohortDailySessions   … コホート内の日次上限
+ *   globalDailySessions   … サービス全体のヒューズ。通常は発火しない
+ *
+ * globalDailySessions を cohortTotalSessions より大きく取っているのは、
+ * コホートが枠を使い切った日に運営側の動作確認まで塞がれるのを避けるため。
+ * 費用の歯止めは cohortTotalSessions（実測 約7円/セッション）と
+ * OpenAI 側の Auto-reload 月間上限の二重で効く。
+ *
+ * src が一致しないアクセス（知人コホート・運営のテスト）はコホート上限の対象外。
+ * つまり ?src を外せばコホート上限は回避できる。Pilotではこれを許容する
+ * （note の読者はリンクをそのまま踏むため）。完全な閉鎖が必要になったら
+ * 招待コード方式へ切り替える。
+ */
+export const PUBLIC_PILOT = {
+  /** 環境変数で切る。既定は無効（知人コホートの運用を変えない） */
+  enabled: process.env.PUBLIC_PILOT_ENABLED === "1",
+  /** この src を持つセッションだけがコホート上限の対象 */
+  src: process.env.PUBLIC_PILOT_SRC || "note_wave2",
+  cohortTotalSessions: numFromEnv("PUBLIC_PILOT_TOTAL", 30),
+  cohortDailySessions: numFromEnv("PUBLIC_PILOT_DAILY", 30),
+  cohortSessionsPerClientPerDay: numFromEnv("PUBLIC_PILOT_PER_CLIENT_DAILY", 1),
+  globalDailySessions: numFromEnv("PUBLIC_PILOT_GLOBAL_DAILY", 50),
+} as const;
+
+/** 上限に達したときに画面へ出す文言（会話は始めず、APIも呼ばない） */
+export const CAPACITY_MESSAGES = {
+  cohortTotal: "今回のテスト参加枠は終了しました。また別の機会に開きます。",
+  cohortDaily: "本日のテスト参加枠は終了しました。また明日開きます。",
+  perClientDaily: "今日はここまでにしておこう。また明日話そう。",
+  globalDaily: "いまアクセスが集中しています。少し時間を置いて開いてみてください。",
+} as const;
+
+function numFromEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+/**
  * 直近この件数のEpisodeは再提示しない。
  *
  * 8だと、5日×2回で同じ人に同じ話が回ってくる確率が高かった。

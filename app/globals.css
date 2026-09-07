@@ -298,6 +298,11 @@ footer{
   font-size:8.5px;letter-spacing:.2em;
   padding:0 0 14px;
 }
+/* 「LOGGLYPHとは」と「記録を削除する」が字間だけで繋がって
+   1つの文字列に見えていたため、行を分けて間隔を取る。 */
+.site-foot{
+  display:flex;flex-direction:column;align-items:center;gap:10px;
+}
 
 /* ---------- conversation complete ---------- */
 .complete-area{border-top:1px solid var(--line);padding:20px 20px 32px}
@@ -662,3 +667,122 @@ button.ghost.restart{margin-top:18px}
 }
 .vchip:hover{background:var(--glass-strong)}
 .vchip.on{background:#fff;color:var(--ink);border-color:var(--line-strong);font-weight:700}
+
+/* ============================================================
+   /found ── 「あなたが話してくれたこと」
+   Wave 2 設計合意 §5。会話画面と同じ時間帯グラデーションと .card に乗せる。
+   ============================================================ */
+.found{
+  flex:1;
+  display:flex;flex-direction:column;
+  padding:30px 26px 22px;
+}
+.found-h{
+  margin:0 0 22px;
+  color:var(--ink);
+  font-size:15.5px;letter-spacing:.06em;font-weight:600;
+  line-height:1.9;
+}
+.found-list{list-style:none;margin:0 0 26px;padding:0;display:flex;flex-direction:column;gap:22px}
+/* 記憶の一行は本人の言葉なので、会話の吹き出しと同じ読み速度に合わせる */
+.found-mem{
+  margin:0;
+  background:var(--glass);
+  border:1px solid var(--line);
+  border-radius:13px;
+  padding:14px 16px;
+  color:var(--ink);
+  font-size:14px;line-height:1.95;
+}
+/* 承認済みの観察文だけが入る段。未承認なら段ごと出さない（Found.tsx 側で制御） */
+.found-note{margin:14px 0 0;padding:0 4px}
+.found-note-h{
+  margin:0 0 8px;
+  color:var(--ink-faint);
+  font-size:10.5px;letter-spacing:.16em;
+}
+.found-note p{
+  margin:0;color:var(--ink-soft);
+  font-size:13.5px;line-height:2.05;
+}
+.found-empty{
+  color:var(--ink-soft);font-size:13.5px;line-height:2.1;margin:0 0 26px;
+}
+
+/* 1タップ評価（Personal Value Recognition）。
+   再利用を促すCTAではないので、色でも大きさでも主張させない。 */
+.found-tap{margin:0 0 22px;padding-top:20px;border-top:1px solid var(--line)}
+.found-tap-q{margin:0 0 12px;color:var(--ink-soft);font-size:12.5px;line-height:1.9}
+.found-tap-row{display:flex;flex-wrap:wrap;gap:8px}
+.found-tap-row button{
+  background:var(--glass);
+  border:1px solid var(--line);
+  border-radius:999px;
+  padding:9px 15px;
+  color:var(--ink);
+  font:inherit;font-size:12.5px;
+  cursor:pointer;
+  transition:background .2s;
+}
+.found-tap-row button:hover{background:#fff}
+.found-thanks{margin:0;color:var(--ink-soft);font-size:12.5px;line-height:1.9}
+
+.found-disclaimer{
+  margin:0;color:var(--ink-faint);
+  font-size:11.5px;line-height:2;
+}
+/* 戻る導線はテキストのみ。ボタンにすると再訪が「誘導された行動」になり、
+   Return Pull が測れなくなる。 */
+.found-foot{
+  margin-top:auto;padding-top:28px;
+  display:flex;flex-direction:column;align-items:center;gap:14px;
+  text-align:center;
+}
+.found-foot .about-link{text-decoration:none}
+
+/* ---------- 削除 ---------- */
+/* 注意書きは「始める前に読める位置」に置く。読み飛ばしを前提に、
+   本文より小さくはするが、読める大きさは保つ。 */
+.gate-fine{display:flex;flex-direction:column;gap:.9em;margin-top:-14px}
+.gate-fine p{
+  margin:0;
+  /* 同意の前に読んでもらう文なので、注記色（--ink-faint）ではなく
+     一段濃い --ink-soft を使う。小さくはするが、読めなくはしない。 */
+  color:var(--ink-soft);
+  font-size:11.5px;line-height:1.95;letter-spacing:.01em;
+}
+.danger-link{
+  background:none;border:none;font:inherit;cursor:pointer;
+  color:var(--ink-faint);
+  letter-spacing:.24em;font-size:9.5px;
+  padding:0;
+}
+.danger-link:hover{color:#b4705f}
+.del-box{
+  text-align:left;
+  background:var(--glass);
+  border:1px solid var(--line);
+  border-radius:13px;
+  padding:14px 16px;
+  display:flex;flex-direction:column;gap:.9em;
+}
+.del-box p{margin:0;color:var(--ink-soft);font-size:12px;line-height:1.95;letter-spacing:normal}
+.del-warn{color:#a2723c !important}
+.del-actions{display:flex;align-items:center;gap:14px;margin-top:4px}
+.del-actions .danger{
+  background:rgba(255,244,240,.9);
+  border:1px solid rgba(214,160,146,.7);
+  border-radius:999px;
+  padding:9px 16px;
+  color:#8f5344;
+  font:inherit;font-size:12.5px;letter-spacing:normal;
+  cursor:pointer;
+}
+.del-actions .danger:disabled{opacity:.5;cursor:default}
+.del-msg{
+  margin:0;color:var(--ink-soft);
+  font-size:11.5px;line-height:1.95;letter-spacing:normal;
+}
+@media (max-width:400px){
+  .found{padding:26px 22px 20px}
+}

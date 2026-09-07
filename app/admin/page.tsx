@@ -11,6 +11,13 @@ import {
   LogMessage,
   SPONTANEOUS_MIN_CHARS,
 } from "../../lib/metrics";
+import {
+  threeLayerPull,
+  splitSilentSessions,
+  minutesToRevisit,
+  medianMinutes,
+  isDeletedToken,
+} from "../../lib/found";
 
 export const dynamic = "force-dynamic";
 
@@ -18,6 +25,9 @@ interface SessionRow {
   session_id: string;
   started_at: string;
   completed_at: string | null;
+  client_token: string | null;
+  src: string | null;
+  content_deleted_at: string | null;
   status: string;
   memory_trigger_category: string | null;
   episode_source_type: string | null;
@@ -183,6 +193,141 @@ export default async function AdminHome({
     };
   });
 
+  /* ============================================================
+     3層の引き（Entry / Conversation / Return）と found ファネル
+     ============================================================
+
+     Wave 1 ではこの3つが1つの数字に混ざっていたため、
+     「改善したのは中段だけ」という事実が Admin から見えなかった。
+
+     ⚠ Entry Pull の分母（entry_views）は Stage 1 を入れた時点から
+       しか存在しない。それより前のセッションと並べると分母が足りず、
+       Entry Pull が実態より良く見える。したがって
+       「最初の entry_view の時刻」以降のセッションだけを対象にする。
+       prompt_version では絞らない（Stage 1 の有無が別の時代を作るため）。
+  */
+  const [entryRes, rejectRes, foundViewRes, noteRes] = await Promise.all([
+    supabase
+      .from("entry_views")
+      .select("client_token, viewed_at, accepted_at, src")
+      .order("viewed_at", { ascending: true }),
+    supabase
+      .from("capacity_rejections")
+      .select("reason, rejected_at, src"),
+    supabase
+      .from("found_views")
+      .select("client_token, viewed_at, value_response")
+      .order("viewed_at", { ascending: true }),
+    supabase
+      .from("found_notes")
+      .select("session_id, approved"),
+  ]);
+
+  const entryRows = (entryRes.data ?? []) as Array<{
+    client_token: string;
+    viewed_at: string;
+    accepted_at: string | null;
+    src: string | null;
+  }>;
+  const rejectRows = (rejectRes.data ?? []) as Array<{
+    reason: string;
+    rejected_at: string;
+    src: string | null;
+  }>;
+  const foundViewRows = (foundViewRes.data ?? []) as Array<{
+    client_token: string;
+    viewed_at: string;
+    value_response: string | null;
+  }>;
+  const noteRows = (noteRes.data ?? []) as Array<{
+    session_id: string;
+    approved: boolean;
+  }>;
+
+  const stage1Since = entryRows.length > 0 ? entryRows[0].viewed_at : null;
+
+  // Stage 1 が動き出してからのセッションだけを3層の対象にする
+  const stage1Sessions = stage1Since
+    ? allRows.filter((r) => r.started_at >= stage1Since)
+    : [];
+
+  const entryPeople = new Set(entryRows.map((r) => r.client_token)).size;
+  const acceptedPeople = new Set(
+    entryRows.filter((r) => r.accepted_at).map((r) => r.client_token)
+  ).size;
+
+  const layers = threeLayerPull(
+    stage1Sessions.map((r) => ({
+      client_token: r.client_token,
+      started_at: r.started_at,
+      user_message_count: r.user_message_count,
+      memory_found: r.memory_found,
+    })),
+    entryPeople
+  );
+
+  /*
+   * 0発話の分離。
+   * 1本目が0発話 = 本当の離脱。2本目以降が0発話 = 1本話したあと覗いて閉じた。
+   * 混ぜると Completion / Memory Found が実態より低く出る（Wave 1 で実際に起きた）。
+   * ここは prompt_version で絞った rows に対して見る。
+   */
+  const silent = splitSilentSessions(
+    rows.map((r) => ({
+      client_token: r.client_token,
+      started_at: r.started_at,
+      user_message_count: r.user_message_count,
+      memory_found: r.memory_found,
+    }))
+  );
+
+  /* found ファネル。閲覧 → 1タップ → 再訪 → 新規Memory */
+  const foundPeople = new Set(foundViewRows.map((r) => r.client_token)).size;
+  const valueCounts = { fit: 0, off: 0, unknown: 0 } as Record<string, number>;
+  for (const r of foundViewRows) {
+    if (r.value_response && r.value_response in valueCounts) {
+      valueCounts[r.value_response] += 1;
+    }
+  }
+
+  const sessionsByToken = new Map<string, SessionRow[]>();
+  for (const r of allRows) {
+    if (!r.client_token) continue;
+    const list = sessionsByToken.get(r.client_token) ?? [];
+    list.push(r);
+    sessionsByToken.set(r.client_token, list);
+  }
+
+  // 1人につき最初の閲覧だけを見る（同じ人が何度も開いても再訪は1回で数える）
+  const firstFoundViewByToken = new Map<string, string>();
+  for (const r of foundViewRows) {
+    if (!firstFoundViewByToken.has(r.client_token)) {
+      firstFoundViewByToken.set(r.client_token, r.viewed_at);
+    }
+  }
+
+  const revisitMinutes: number[] = [];
+  let revisitPeople = 0;
+  let revisitWithNewMemory = 0;
+  for (const [token, viewedAt] of firstFoundViewByToken) {
+    const own = sessionsByToken.get(token) ?? [];
+    const mins = minutesToRevisit(
+      viewedAt,
+      own.map((s) => s.started_at)
+    );
+    if (mins == null) continue;
+    revisitPeople += 1;
+    revisitMinutes.push(mins);
+    const after = own.filter((s) => s.started_at > viewedAt);
+    if (after.some((s) => s.memory_found)) revisitWithNewMemory += 1;
+  }
+
+  const approvedNotes = noteRows.filter((n) => n.approved).length;
+  const pendingNotes = noteRows.length - approvedNotes;
+  const deletedSessions = allRows.filter(
+    (r) => r.content_deleted_at || isDeletedToken(r.client_token)
+  ).length;
+
   // カテゴリ別の成績（どのEpisodeが記憶を引き出せたか）
   const byCategory = new Map<string, { total: number; found: number }>();
   for (const r of rows) {
@@ -258,6 +403,143 @@ export default async function AdminHome({
           <p>この状態では会話も記録されません。</p>
         </div>
       )}
+
+      {/* ============================================================
+          3層の引き。Wave 2 以降はここを主に見る。
+          ============================================================ */}
+      <h2>3層の引き（Entry / Conversation / Return）</h2>
+      {stage1Since ? (
+        <>
+          <section className="stats">
+            <Stat
+              label="Entry Pull"
+              value={layers.entry.rate == null ? "—" : `${layers.entry.rate}%`}
+              note={`会話を始めた ${layers.entry.started}人 / 到達 ${layers.entry.views}人`}
+            />
+            <Stat
+              label="注意書きに同意"
+              value={pct(acceptedPeople, entryPeople)}
+              note={`${acceptedPeople} / ${entryPeople}人（到達→同意→開始 の中段）`}
+            />
+            <Stat
+              label="Conversation Pull"
+              value={
+                layers.conversation.rate == null
+                  ? "—"
+                  : `${layers.conversation.rate}%`
+              }
+              note={`記憶が出た ${layers.conversation.withMemory}人 / 会話した ${layers.conversation.talked}人`}
+            />
+            <Stat
+              label="Return Pull"
+              value={layers.returning.rate == null ? "—" : `${layers.returning.rate}%`}
+              note={`2日以上使った ${layers.returning.repeat}人 / ${layers.returning.people}人（JST日付）`}
+            />
+            <Stat
+              label="枠で断った"
+              value={String(rejectRows.length)}
+              note="Entry Pull の分母から除外済み"
+            />
+          </section>
+          <p className="admin-note">
+            Entry Pull の分母は Stage 1（到達イベント）以降のみです。
+            対象は {new Date(stage1Since).toLocaleString("ja-JP")} 以降に始まった
+            {" "}{stage1Sessions.length} セッション。
+            <strong>prompt_version では絞っていません</strong>
+            （Stage 1 の有無が別の時代を作るため）。上の版フィルタはこの節に効きません。
+            <br />
+            「枠で断った」は上限に達して会話を始められなかった人です。
+            興味がなくて始めなかった人と混ぜると Entry Pull が壊れるため、
+            分母から除いています。
+            {rejectRows.length > 0 && (
+              <>
+                {" "}内訳：
+                {Object.entries(
+                  rejectRows.reduce<Record<string, number>>((acc, r) => {
+                    acc[r.reason] = (acc[r.reason] ?? 0) + 1;
+                    return acc;
+                  }, {})
+                )
+                  .map(([k, v]) => `${k} ${v}`)
+                  .join(" / ")}
+              </>
+            )}
+          </p>
+        </>
+      ) : (
+        <p className="admin-note">
+          Stage 1（到達イベント）のデータがまだありません。Entry Pull は
+          entry_views に最初の行が入ってから表示されます。
+          それまで Entry Pull は<strong>一度も実測されていません</strong>
+          （「はじめる」を押すまでサーバーに何も記録していなかったため）。
+        </p>
+      )}
+
+      <h2>0発話の内訳</h2>
+      <section className="stats compact">
+        <Stat
+          label="1本目が0発話"
+          value={String(silent.firstSilent)}
+          note="Episodeを読んで帰った。本当の離脱"
+        />
+        <Stat
+          label="2本目以降が0発話"
+          value={String(silent.laterSilent)}
+          note="1本話したあと覗いて閉じた。離脱ではない"
+        />
+      </section>
+      <p className="admin-note">
+        この2つを「0発話」として一括りにすると、Completion / Memory Found が
+        実態より低く出ます（Wave 1 で実際に起きました）。下の Primary KPI は
+        まだ分離していない値です。
+      </p>
+
+      {/* ---------- found ファネル ---------- */}
+      <h2>/found ファネル</h2>
+      <section className="stats compact">
+        <Stat label="閲覧した人" value={String(foundPeople)} note="ユニーク端末" />
+        <Stat
+          label="しっくりきた"
+          value={String(valueCounts.fit)}
+          note={`少し違う ${valueCounts.off} / わからない ${valueCounts.unknown}`}
+        />
+        <Stat
+          label="閲覧後に再訪"
+          value={pct(revisitPeople, foundPeople)}
+          note={`${revisitPeople} / ${foundPeople}人`}
+        />
+        <Stat
+          label="再訪までの中央値"
+          value={
+            medianMinutes(revisitMinutes) == null
+              ? "—"
+              : `${medianMinutes(revisitMinutes)}分`
+          }
+          note={revisitMinutes.length ? `${revisitMinutes.length}件` : "再訪なし"}
+        />
+        <Stat
+          label="再訪で新規Memory"
+          value={String(revisitWithNewMemory)}
+          note={`再訪 ${revisitPeople}人のうち`}
+        />
+        <Stat
+          label="観察文"
+          value={`${approvedNotes} 承認済み`}
+          note={`未承認 ${pendingNotes}件（未承認は画面に出ません）`}
+        />
+      </section>
+      <p className="admin-note">
+        /found の案内は Return Pull を測るための Trigger です。案内文に
+        「また使ってください」を書かないこと。書くと、その後の再訪が
+        誘導された行動になり、Return Pull が測れなくなります。
+        {deletedSessions > 0 && (
+          <>
+            <br />
+            本人の削除操作で内容を消したセッション：{deletedSessions}件。
+            行と匿名の集計値は残しています（設計どおり）。
+          </>
+        )}
+      </p>
 
       <h2>Primary KPI</h2>
       <section className="stats">
