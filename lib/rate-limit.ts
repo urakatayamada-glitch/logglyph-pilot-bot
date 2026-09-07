@@ -4,6 +4,7 @@ import {
   PUBLIC_PILOT,
   CAPACITY_MESSAGES,
 } from "./conversation/config";
+import { decideCapacity, type CapacityReason } from "./found";
 import { getSupabaseAdmin } from "./supabase-server";
 
 /**
@@ -29,7 +30,7 @@ export interface RateLimitVerdict {
    *   Entry Pull の分母から除外する。「興味がなくて始めなかった人」と
    *   「枠がなくて始められなかった人」を混ぜると Entry Pull が壊れる。
    */
-  capacityReason?: "cohort_total" | "cohort_daily" | "per_client_daily" | "global_daily";
+  capacityReason?: CapacityReason;
 }
 
 /**
@@ -93,62 +94,64 @@ export async function checkPublicPilotCapacity(
   if (!supabase) return { allowed: true };
 
   const dayStartJst = startOfJstDayIso();
+  const isCohort = src === PUBLIC_PILOT.src;
 
-  // 全体のヒューズ。src に関係なく効く。
-  const { count: globalToday } = await supabase
-    .from("sessions")
-    .select("session_id", { count: "exact", head: true })
-    .gte("started_at", dayStartJst);
-  if ((globalToday ?? 0) >= PUBLIC_PILOT.globalDailySessions) {
-    return {
-      allowed: false,
-      reason: CAPACITY_MESSAGES.globalDaily,
-      capacityReason: "global_daily",
-    };
+  /*
+   * 数を集めるところと、判定するところを分けている。
+   * 判定は lib/found.ts の decideCapacity（純関数）にあり、
+   * 境界は tests/found.test.mts で確認している。
+   * こうしておかないと「総数30に達したとき」の挙動を確かめるために
+   * 本番で30セッション作る必要が出てしまう。
+   */
+  const countSessions = async (
+    apply: (q: ReturnType<typeof baseQuery>) => ReturnType<typeof baseQuery>
+  ) => {
+    const { count } = await apply(baseQuery());
+    return count ?? 0;
+  };
+  function baseQuery() {
+    return supabase!
+      .from("sessions")
+      .select("session_id", { count: "exact", head: true });
   }
 
-  if (src !== PUBLIC_PILOT.src) return { allowed: true };
+  const globalToday = await countSessions((q) => q.gte("started_at", dayStartJst));
+  // コホート以外は全体のヒューズだけを見るので、余計な問い合わせをしない
+  const cohortTotal = isCohort
+    ? await countSessions((q) => q.eq("src", PUBLIC_PILOT.src))
+    : 0;
+  const cohortToday = isCohort
+    ? await countSessions((q) =>
+        q.eq("src", PUBLIC_PILOT.src).gte("started_at", dayStartJst)
+      )
+    : 0;
+  const clientToday = isCohort
+    ? await countSessions((q) =>
+        q.eq("client_token", clientToken).gte("started_at", dayStartJst)
+      )
+    : 0;
 
-  // コホートの総数。これがコホートの定義そのもの。
-  const { count: cohortTotal } = await supabase
-    .from("sessions")
-    .select("session_id", { count: "exact", head: true })
-    .eq("src", PUBLIC_PILOT.src);
-  if ((cohortTotal ?? 0) >= PUBLIC_PILOT.cohortTotalSessions) {
-    return {
-      allowed: false,
-      reason: CAPACITY_MESSAGES.cohortTotal,
-      capacityReason: "cohort_total",
-    };
-  }
+  const reason = decideCapacity(
+    src,
+    { globalToday, cohortTotal, cohortToday, clientToday },
+    {
+      cohortSrc: PUBLIC_PILOT.src,
+      cohortTotalSessions: PUBLIC_PILOT.cohortTotalSessions,
+      cohortDailySessions: PUBLIC_PILOT.cohortDailySessions,
+      cohortSessionsPerClientPerDay: PUBLIC_PILOT.cohortSessionsPerClientPerDay,
+      globalDailySessions: PUBLIC_PILOT.globalDailySessions,
+    }
+  );
 
-  const { count: cohortToday } = await supabase
-    .from("sessions")
-    .select("session_id", { count: "exact", head: true })
-    .eq("src", PUBLIC_PILOT.src)
-    .gte("started_at", dayStartJst);
-  if ((cohortToday ?? 0) >= PUBLIC_PILOT.cohortDailySessions) {
-    return {
-      allowed: false,
-      reason: CAPACITY_MESSAGES.cohortDaily,
-      capacityReason: "cohort_daily",
-    };
-  }
+  if (!reason) return { allowed: true };
 
-  const { count: clientToday } = await supabase
-    .from("sessions")
-    .select("session_id", { count: "exact", head: true })
-    .eq("client_token", clientToken)
-    .gte("started_at", dayStartJst);
-  if ((clientToday ?? 0) >= PUBLIC_PILOT.cohortSessionsPerClientPerDay) {
-    return {
-      allowed: false,
-      reason: CAPACITY_MESSAGES.perClientDaily,
-      capacityReason: "per_client_daily",
-    };
-  }
-
-  return { allowed: true };
+  const messages: Record<CapacityReason, string> = {
+    cohort_total: CAPACITY_MESSAGES.cohortTotal,
+    cohort_daily: CAPACITY_MESSAGES.cohortDaily,
+    per_client_daily: CAPACITY_MESSAGES.perClientDaily,
+    global_daily: CAPACITY_MESSAGES.globalDaily,
+  };
+  return { allowed: false, reason: messages[reason], capacityReason: reason };
 }
 
 /** 上限で断ったアクセスを記録する。失敗しても本来の応答は壊さない。 */

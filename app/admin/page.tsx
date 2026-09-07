@@ -17,6 +17,7 @@ import {
   minutesToRevisit,
   medianMinutes,
   isDeletedToken,
+  countValueResponsesPerPerson,
 } from "../../lib/found";
 
 export const dynamic = "force-dynamic";
@@ -283,12 +284,12 @@ export default async function AdminHome({
 
   /* found ファネル。閲覧 → 1タップ → 再訪 → 新規Memory */
   const foundPeople = new Set(foundViewRows.map((r) => r.client_token)).size;
-  const valueCounts = { fit: 0, off: 0, unknown: 0 } as Record<string, number>;
-  for (const r of foundViewRows) {
-    if (r.value_response && r.value_response in valueCounts) {
-      valueCounts[r.value_response] += 1;
-    }
-  }
+  /*
+   * 1タップ評価は1人1票で数える。
+   * /found を開くたびに found_views の行が増えるため、行を素直に数えると
+   * 同じ人が何度も開いて押した分だけ回答が水増しされる。最初の回答だけを採る。
+   */
+  const valueCounts = countValueResponsesPerPerson(foundViewRows);
 
   const sessionsByToken = new Map<string, SessionRow[]>();
   for (const r of allRows) {
@@ -501,7 +502,7 @@ export default async function AdminHome({
         <Stat
           label="しっくりきた"
           value={String(valueCounts.fit)}
-          note={`少し違う ${valueCounts.off} / わからない ${valueCounts.unknown}`}
+          note={`少し違う ${valueCounts.off} / わからない ${valueCounts.unknown}（1人1票）`}
         />
         <Stat
           label="閲覧後に再訪"

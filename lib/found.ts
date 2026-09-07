@@ -174,3 +174,91 @@ export function medianMinutes(values: number[]): number | null {
   const mid = Math.floor(v.length / 2);
   return v.length % 2 === 1 ? v[mid] : Math.round((v[mid - 1] + v[mid]) / 2);
 }
+
+/* ============================================================
+   Wave 2 の枠判定（純関数）
+   ============================================================
+
+   DBから数を集めるところと、その数から断るかどうかを決めるところを分ける。
+   分けた理由は検証のため。
+
+   「総数30に達したとき」「日次30に達したとき」の挙動は、
+   実際に30セッション作らないと確かめられない形にしてしまうと、
+   本番データを汚さずに検証できなくなる。判定だけを純関数にすれば
+   node:test で全境界を確認できる。
+*/
+
+export type CapacityReason =
+  | "cohort_total"
+  | "cohort_daily"
+  | "per_client_daily"
+  | "global_daily";
+
+export interface CapacityLimits {
+  cohortSrc: string;
+  cohortTotalSessions: number;
+  cohortDailySessions: number;
+  cohortSessionsPerClientPerDay: number;
+  globalDailySessions: number;
+}
+
+export interface CapacityCounts {
+  /** サービス全体の当日セッション数（src を問わない） */
+  globalToday: number;
+  /** コホートの累計セッション数 */
+  cohortTotal: number;
+  /** コホートの当日セッション数 */
+  cohortToday: number;
+  /** この端末の当日セッション数 */
+  clientToday: number;
+}
+
+/**
+ * 断るかどうかを決める。null なら通してよい。
+ *
+ * 判定順に意味がある。
+ *   1. 全体のヒューズ … src を問わず先に見る（費用の最終防衛線）
+ *   2. コホート総数   … コホートの定義そのもの
+ *   3. コホート日次   … その日の枠
+ *   4. 端末ごと日次   … 1人が枠を独占しないため
+ *
+ * src が一致しないアクセス（知人コホート・運営のテスト）は 1 だけを見る。
+ */
+export function decideCapacity(
+  src: string | null,
+  counts: CapacityCounts,
+  limits: CapacityLimits
+): CapacityReason | null {
+  if (counts.globalToday >= limits.globalDailySessions) return "global_daily";
+  if (src !== limits.cohortSrc) return null;
+  if (counts.cohortTotal >= limits.cohortTotalSessions) return "cohort_total";
+  if (counts.cohortToday >= limits.cohortDailySessions) return "cohort_daily";
+  if (counts.clientToday >= limits.cohortSessionsPerClientPerDay) {
+    return "per_client_daily";
+  }
+  return null;
+}
+
+/**
+ * 1人につき1つだけ 1タップ評価を数える。
+ *
+ * /found を開くたびに found_views の行が増えるため、同じ人が何度も開いて
+ * 押すと、行を素直に数えると回答が水増しされる。最初の回答だけを採る。
+ */
+export function countValueResponsesPerPerson(
+  rows: Array<{ client_token: string; viewed_at: string; value_response: string | null }>
+): Record<string, number> {
+  const firstByToken = new Map<string, { at: string; value: string }>();
+  for (const r of rows) {
+    if (!r.value_response) continue;
+    const cur = firstByToken.get(r.client_token);
+    if (!cur || r.viewed_at < cur.at) {
+      firstByToken.set(r.client_token, { at: r.viewed_at, value: r.value_response });
+    }
+  }
+  const counts: Record<string, number> = { fit: 0, off: 0, unknown: 0 };
+  for (const { value } of firstByToken.values()) {
+    if (value in counts) counts[value] += 1;
+  }
+  return counts;
+}

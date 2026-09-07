@@ -23,6 +23,8 @@ import {
   threeLayerPull,
   minutesToRevisit,
   medianMinutes,
+  decideCapacity,
+  countValueResponsesPerPerson,
 } from "../lib/found.ts";
 
 test("client_token は UUID v4 だけを通す", () => {
@@ -174,4 +176,99 @@ test("中央値", () => {
   assert.equal(medianMinutes([5]), 5);
   assert.equal(medianMinutes([30, 10, 20]), 20);
   assert.equal(medianMinutes([10, 20, 30, 40]), 25);
+});
+
+/* ============================================================
+   Wave 2 の枠判定
+   ============================================================
+   「総数30に達したとき」の挙動を確かめるために本番で30セッション作る、
+   ということをしなくて済むように、判定だけを純関数にして境界を確認する。
+*/
+const LIMITS = {
+  cohortSrc: "note_wave2",
+  cohortTotalSessions: 30,
+  cohortDailySessions: 30,
+  cohortSessionsPerClientPerDay: 1,
+  globalDailySessions: 50,
+};
+const ZERO = { globalToday: 0, cohortTotal: 0, cohortToday: 0, clientToday: 0 };
+
+test("枠：まだ空いていれば通す", () => {
+  assert.equal(decideCapacity("note_wave2", ZERO, LIMITS), null);
+  assert.equal(decideCapacity(null, ZERO, LIMITS), null);
+});
+
+test("枠：コホート総数の境界は「達した時点」で断る", () => {
+  assert.equal(
+    decideCapacity("note_wave2", { ...ZERO, cohortTotal: 29 }, LIMITS),
+    null
+  );
+  // 30件目は通らない。30を「上限」と読む（29件目までが参加者）
+  assert.equal(
+    decideCapacity("note_wave2", { ...ZERO, cohortTotal: 30 }, LIMITS),
+    "cohort_total"
+  );
+  assert.equal(
+    decideCapacity("note_wave2", { ...ZERO, cohortTotal: 31 }, LIMITS),
+    "cohort_total"
+  );
+});
+
+test("枠：コホート日次と端末ごと日次", () => {
+  assert.equal(
+    decideCapacity("note_wave2", { ...ZERO, cohortToday: 30 }, LIMITS),
+    "cohort_daily"
+  );
+  assert.equal(
+    decideCapacity("note_wave2", { ...ZERO, clientToday: 1 }, LIMITS),
+    "per_client_daily"
+  );
+  assert.equal(
+    decideCapacity("note_wave2", { ...ZERO, clientToday: 0 }, LIMITS),
+    null
+  );
+});
+
+test("枠：全体のヒューズは src を問わず先に効く", () => {
+  // 知人コホート（src なし）でも全体上限は効く
+  assert.equal(
+    decideCapacity(null, { ...ZERO, globalToday: 50 }, LIMITS),
+    "global_daily"
+  );
+  // 全体上限とコホート総数が同時に埋まっていたら、全体が先に返る
+  assert.equal(
+    decideCapacity(
+      "note_wave2",
+      { globalToday: 50, cohortTotal: 30, cohortToday: 30, clientToday: 1 },
+      LIMITS
+    ),
+    "global_daily"
+  );
+});
+
+test("枠：コホート以外はコホート上限の対象にならない", () => {
+  // 運営のテストや知人コホートが、note の枠が埋まったせいで止まらないこと
+  const full = { globalToday: 10, cohortTotal: 30, cohortToday: 30, clientToday: 5 };
+  assert.equal(decideCapacity(null, full, LIMITS), null);
+  assert.equal(decideCapacity("other_source", full, LIMITS), null);
+  assert.equal(decideCapacity("note_wave2", full, LIMITS), "cohort_total");
+});
+
+test("1タップ評価は1人1票。開き直して押しても増えない", () => {
+  const rows = [
+    { client_token: "a", viewed_at: "2026-09-11T10:00:00Z", value_response: "fit" },
+    // 同じ人が開き直して別の答えを押した。最初の回答だけを採る
+    { client_token: "a", viewed_at: "2026-09-11T11:00:00Z", value_response: "off" },
+    { client_token: "a", viewed_at: "2026-09-11T12:00:00Z", value_response: "off" },
+    { client_token: "b", viewed_at: "2026-09-11T10:30:00Z", value_response: "off" },
+    // 開いたが押さなかった人は数えない
+    { client_token: "c", viewed_at: "2026-09-11T10:40:00Z", value_response: null },
+  ];
+  assert.deepEqual(countValueResponsesPerPerson(rows), { fit: 1, off: 1, unknown: 0 });
+  // 順序が入れ替わっても「最初の回答」を採る
+  assert.deepEqual(
+    countValueResponsesPerPerson([...rows].reverse()),
+    { fit: 1, off: 1, unknown: 0 }
+  );
+  assert.deepEqual(countValueResponsesPerPerson([]), { fit: 0, off: 0, unknown: 0 });
 });
