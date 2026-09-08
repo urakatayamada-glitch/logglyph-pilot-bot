@@ -22,9 +22,31 @@ export async function POST(req: Request) {
     const ipHash = hashIp(req);
     const cohortSrc = typeof src === "string" && src.trim() ? src.trim().slice(0, 64) : null;
 
+    /*
+     * すでに存在するセッションの再登録は、枠もレート制限も数えない。
+     *
+     * このエンドポイントは upsert なので、ページを再読み込みして会話を復元した
+     * ときにも同じ session_id で呼ばれる。そこで枠を数えると、
+     * 「この端末は今日すでに1回使っている」＝自分自身の1回を理由に断ってしまい、
+     * 会話中の再読み込みで会話が打ち切られる。
+     *
+     * 1日1セッションに絞った Wave 2 で必ず表に出る（上限10のときは埋もれていた）。
+     */
+    const supabaseForCheck = getSupabaseAdmin();
+    let isResume = false;
+    if (supabaseForCheck) {
+      const { count } = await supabaseForCheck
+        .from("sessions")
+        .select("session_id", { count: "exact", head: true })
+        .eq("session_id", sessionId);
+      isResume = (count ?? 0) > 0;
+    }
+
     // Wave 2 の枠チェックを先に見る。
     // 断る場合はここで返すので、OpenAI は一度も呼ばれない。
-    const capacity = await checkPublicPilotCapacity(clientToken, cohortSrc);
+    const capacity = isResume
+      ? { allowed: true as const }
+      : await checkPublicPilotCapacity(clientToken, cohortSrc);
     if (!capacity.allowed) {
       // ⚠ 上限で断った人は Entry Pull の分母から除外する必要がある。
       //    ここで記録しないと「興味がなくて始めなかった人」と混ざる。
@@ -40,7 +62,9 @@ export async function POST(req: Request) {
       );
     }
 
-    const verdict = await checkSessionRateLimit(clientToken, ipHash);
+    const verdict = isResume
+      ? { allowed: true as const }
+      : await checkSessionRateLimit(clientToken, ipHash);
     if (!verdict.allowed) {
       return NextResponse.json(
         { ok: false, rateLimited: true, message: verdict.reason },
