@@ -195,7 +195,8 @@ export type CapacityReason =
   | "global_daily";
 
 export interface CapacityLimits {
-  cohortSrc: string;
+  /** コホートに属する src の集合。記事が増えても上限は1つ */
+  cohortSrcs: readonly string[];
   /** 人数（ユニーク client_token）の上限。セッション数ではない */
   cohortTotalPeople: number;
   cohortDailySessions: number;
@@ -238,7 +239,7 @@ export function decideCapacity(
   limits: CapacityLimits
 ): CapacityReason | null {
   if (counts.globalToday >= limits.globalDailySessions) return "global_daily";
-  if (src !== limits.cohortSrc) return null;
+  if (!src || !limits.cohortSrcs.includes(src)) return null;
   /*
    * すでに枠に入っている人は、総数上限では断らない。
    * 断ってしまうと「30人目が埋まった瞬間、29人目までの人も
@@ -276,4 +277,31 @@ export function countValueResponsesPerPerson(
     if (value in counts) counts[value] += 1;
   }
   return counts;
+}
+
+/**
+ * 「到達したが、枠で断られただけ」の人を Entry Pull の分母から外す。
+ *
+ * ⚠ 到達（entry_views）と枠での拒否（capacity_rejections）は別テーブルなので、
+ *   断られた人も「到達」には残っている。分母に残したままだと、
+ *   興味がなくて始めなかった人と混ざって Entry Pull が実態より低く出る。
+ *
+ * ただし「断られたが、別の日には会話できた人」は除外しない。
+ * その人はちゃんと参加しているので、分母に残すのが正しい。
+ * したがって除外するのは「セッションを1つも持たず、拒否だけがある人」。
+ */
+export function entryDenominator(
+  entryTokens: Iterable<string>,
+  tokensWithSession: Iterable<string>,
+  rejectedTokens: Iterable<string>
+): { people: number; excluded: number } {
+  const entry = new Set(entryTokens);
+  const withSession = new Set(tokensWithSession);
+  const rejected = new Set(rejectedTokens);
+
+  let excluded = 0;
+  for (const t of entry) {
+    if (rejected.has(t) && !withSession.has(t)) excluded += 1;
+  }
+  return { people: entry.size - excluded, excluded };
 }

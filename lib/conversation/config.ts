@@ -57,8 +57,16 @@ export const RATE_LIMITS = {
 export const PUBLIC_PILOT = {
   /** 環境変数で切る。既定は無効（知人コホートの運用を変えない） */
   enabled: process.env.PUBLIC_PILOT_ENABLED === "1",
-  /** この src を持つセッションだけがコホート上限の対象 */
-  src: process.env.PUBLIC_PILOT_SRC || "note_wave2",
+  /**
+   * コホートの src。**カンマ区切りで複数指定できる。**
+   *
+   * 記事を増やすたびに src を分ける必要があるが、上限は記事ごとではなく
+   * コホート全体で1つ（Wave 2-A 合計30人）。単一値にしていると、
+   * 新しい記事の src が上限の対象外になり、枠を無視して入れてしまう。
+   *
+   * 例: PUBLIC_PILOT_SRC=note_wave2,note_wave2_a2
+   */
+  srcs: splitSrcs(process.env.PUBLIC_PILOT_SRC || "note_wave2,note_wave2_a2"),
   /**
    * コホートの上限。**セッション数ではなく人数（ユニーク client_token）**で数える。
    *
@@ -89,6 +97,14 @@ export const CAPACITY_MESSAGES = {
   perClientDaily: "今日はここまでにしておこう。また明日話そう。",
   globalDaily: "いまアクセスが集中しています。少し時間を置いて開いてみてください。",
 } as const;
+
+/** カンマ区切りの src を配列にする。空要素と前後の空白は落とす。 */
+function splitSrcs(raw: string): string[] {
+  return raw
+    .split(",")
+    .map((v) => v.trim())
+    .filter(Boolean);
+}
 
 function numFromEnv(name: string, fallback: number): number {
   const raw = process.env[name];

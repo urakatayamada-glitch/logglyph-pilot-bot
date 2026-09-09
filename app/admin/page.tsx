@@ -18,7 +18,10 @@ import {
   medianMinutes,
   isDeletedToken,
   countValueResponsesPerPerson,
+  entryDenominator,
+  threeLayerPull as computeThreeLayer,
 } from "../../lib/found";
+import { PUBLIC_PILOT } from "../../lib/conversation/config";
 
 export const dynamic = "force-dynamic";
 
@@ -44,6 +47,15 @@ interface SessionRow {
   followup_answers: Record<string, number> | null;
   moderation_flag_count: number;
 }
+
+/**
+ * 流入元の表示名。DBの src 値は書き換えず、表示だけ補助する。
+ * 記事1は `note_wave2` で開始してしまったが、値は変えない（既存データを壊さない）。
+ */
+const SRC_LABELS: Record<string, string> = {
+  note_wave2: "Wave2-A / 記事1",
+  note_wave2_a2: "Wave2-A / 共創記事",
+};
 
 /** Wave 1（v1.5.0）で Future Preview のあとに聞く4問 */
 const FOLLOWUP_QUESTIONS: { key: string; label: string }[] = [
@@ -214,7 +226,7 @@ export default async function AdminHome({
       .order("viewed_at", { ascending: true }),
     supabase
       .from("capacity_rejections")
-      .select("reason, rejected_at, src"),
+      .select("reason, rejected_at, src, client_token"),
     supabase
       .from("found_views")
       .select("client_token, viewed_at, value_response")
@@ -234,6 +246,7 @@ export default async function AdminHome({
     reason: string;
     rejected_at: string;
     src: string | null;
+    client_token: string | null;
   }>;
   const foundViewRows = (foundViewRes.data ?? []) as Array<{
     client_token: string;
@@ -277,7 +290,25 @@ export default async function AdminHome({
     stage1Since ? allRows.filter((r) => r.started_at >= stage1Since) : []
   ).filter((r) => matchesSrc(r.src));
 
-  const entryPeople = new Set(entryScoped.map((r) => r.client_token)).size;
+  const rejectScoped = rejectRows.filter((r) => matchesSrc(r.src));
+
+  /*
+   * 枠で断られただけの人を分母から外す。
+   *
+   * ⚠ ここは以前、画面に「分母から除外済み」と書いていながら
+   *   実際には除外していなかった。表示が事実と違っていたので直した。
+   *   断られたが別の日に会話できた人は、参加しているので分母に残す。
+   */
+  const entryDen = entryDenominator(
+    entryScoped.map((r) => r.client_token),
+    stage1Sessions
+      .map((r) => r.client_token)
+      .filter((t): t is string => Boolean(t)),
+    rejectScoped
+      .map((r) => r.client_token)
+      .filter((t): t is string => Boolean(t))
+  );
+  const entryPeople = entryDen.people;
   const acceptedPeople = new Set(
     entryScoped.filter((r) => r.accepted_at).map((r) => r.client_token)
   ).size;
@@ -296,10 +327,11 @@ export default async function AdminHome({
    * 0発話の分離。
    * 1本目が0発話 = 本当の離脱。2本目以降が0発話 = 1本話したあと覗いて閉じた。
    * 混ぜると Completion / Memory Found が実態より低く出る（Wave 1 で実際に起きた）。
-   * ここは prompt_version で絞った rows に対して見る。
+   * 記事ごとに分けて見たいので、流入元で絞った集合に対して数える
+   * （以前は版で絞った rows を見ていたため、記事1と記事2が混ざった）。
    */
   const silent = splitSilentSessions(
-    rows.map((r) => ({
+    stage1Sessions.map((r) => ({
       client_token: r.client_token,
       started_at: r.started_at,
       user_message_count: r.user_message_count,
@@ -347,6 +379,67 @@ export default async function AdminHome({
     const after = own.filter((s) => s.started_at > viewedAt);
     if (after.some((s) => s.memory_found)) revisitWithNewMemory += 1;
   }
+
+  /* ============================================================
+     記事ごとの比較（Wave 2-A）
+     ============================================================
+     上限は記事ごとではなくコホート全体で1つ（合計30人）。
+     比較していいのは Entry Pull / Conversation Pull / 初回0発話まで。
+     Memory Found は、記事2の読者がテーマを理解して入ってくるため
+     記事1や Wave 0/1 との単純比較はできない（参考値）。
+  */
+  const cohortSrcs = PUBLIC_PILOT.srcs as unknown as string[];
+  const articleRows = cohortSrcs.map((src) => {
+    const entry = entryRows.filter((r) => r.src === src);
+    const sessions = (
+      stage1Since ? allRows.filter((r) => r.started_at >= stage1Since) : []
+    ).filter((r) => r.src === src);
+    const rejects = rejectRows.filter((r) => r.src === src);
+    const den = entryDenominator(
+      entry.map((r) => r.client_token),
+      sessions.map((r) => r.client_token).filter((t): t is string => Boolean(t)),
+      rejects.map((r) => r.client_token).filter((t): t is string => Boolean(t))
+    );
+    const layer = computeThreeLayer(
+      sessions.map((r) => ({
+        client_token: r.client_token,
+        started_at: r.started_at,
+        user_message_count: r.user_message_count,
+        memory_found: r.memory_found,
+      })),
+      den.people
+    );
+    const sil = splitSilentSessions(
+      sessions.map((r) => ({
+        client_token: r.client_token,
+        started_at: r.started_at,
+        user_message_count: r.user_message_count,
+        memory_found: r.memory_found,
+      }))
+    );
+    return {
+      src,
+      label: SRC_LABELS[src] ?? src,
+      people: new Set(
+        sessions.map((r) => r.client_token).filter(Boolean)
+      ).size,
+      entryPeople: den.people,
+      excluded: den.excluded,
+      started: layer.entry.started,
+      entryRate: layer.entry.rate,
+      talked: layer.conversation.talked,
+      withMemory: layer.conversation.withMemory,
+      convRate: layer.conversation.rate,
+      firstSilent: sil.firstSilent,
+      laterSilent: sil.laterSilent,
+    };
+  });
+  const cohortPeopleTotal = new Set(
+    allRows
+      .filter((r) => r.src && cohortSrcs.includes(r.src))
+      .map((r) => r.client_token)
+      .filter(Boolean)
+  ).size;
 
   const approvedNotes = noteRows.filter((n) => n.approved).length;
   const pendingNotes = noteRows.length - approvedNotes;
@@ -545,6 +638,97 @@ export default async function AdminHome({
           （「はじめる」を押すまでサーバーに何も記録していなかったため）。
         </p>
       )}
+
+      {/* ============================================================
+          記事ごとの比較（Wave 2-A）
+          ============================================================ */}
+      <h2>記事ごとの比較（Wave 2-A）</h2>
+      <div className="cmp-wrap">
+        <table className="cmp">
+          <thead>
+            <tr>
+              <th />
+              {articleRows.map((a) => (
+                <th key={a.src}>{a.label}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <th>到達（枠で断られた人を除く）</th>
+              {articleRows.map((a) => (
+                <td key={a.src}>
+                  {a.entryPeople}
+                  {a.excluded > 0 && <em>−{a.excluded}</em>}
+                </td>
+              ))}
+            </tr>
+            <tr>
+              <th>会話を始めた</th>
+              {articleRows.map((a) => (
+                <td key={a.src}>{a.started}</td>
+              ))}
+            </tr>
+            <tr className="cmp-key">
+              <th>Entry Pull</th>
+              {articleRows.map((a) => (
+                <td key={a.src}>{a.entryRate == null ? "—" : `${a.entryRate}%`}</td>
+              ))}
+            </tr>
+            <tr>
+              <th>一言でも話した</th>
+              {articleRows.map((a) => (
+                <td key={a.src}>{a.talked}</td>
+              ))}
+            </tr>
+            <tr className="cmp-key">
+              <th>Conversation Pull</th>
+              {articleRows.map((a) => (
+                <td key={a.src}>{a.convRate == null ? "—" : `${a.convRate}%`}</td>
+              ))}
+            </tr>
+            <tr className="cmp-key">
+              <th>初回0発話</th>
+              {articleRows.map((a) => (
+                <td key={a.src}>{a.firstSilent}</td>
+              ))}
+            </tr>
+            <tr>
+              <th>2本目以降0発話</th>
+              {articleRows.map((a) => (
+                <td key={a.src}>{a.laterSilent}</td>
+              ))}
+            </tr>
+            <tr>
+              <th>Memory Found（参考値）</th>
+              {articleRows.map((a) => (
+                <td key={a.src} className="cmp-ref">
+                  {a.withMemory} / {a.talked}
+                </td>
+              ))}
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p className="admin-note">
+        <strong>
+          Wave 2-A 受付：{cohortPeopleTotal} / {PUBLIC_PILOT.cohortTotalPeople}人
+        </strong>
+        （記事ごとではなくコホート合計。上限は人数で数えています）
+        <br />
+        比較していいのは <strong>Entry Pull / Conversation Pull / 初回0発話</strong> です。
+        Memory Found は参考値にとどめてください。記事2の読者は「記憶」というテーマを
+        理解した状態で入ってくるため、記事1や Wave 0 / Wave 1 との単純比較ができません。
+        <br />
+        <strong>
+          そして、記事の書き方が効くのはこの表の手前です。
+        </strong>
+        note のページビュー ÷ 上の「到達」で、記事から来た人の割合が出ます。
+        この表の Entry Pull は「到達したあと会話を始めたか」なので、副指標です。
+        <br />
+        同じ日に両方の記事から来た人は、先に開いた記事に集計されます
+        （到達イベントは同一端末・同一日で1行に集約するため）。n が小さいうちは効きます。
+      </p>
 
       <h2>0発話の内訳</h2>
       <section className="stats compact">

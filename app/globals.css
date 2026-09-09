@@ -786,3 +786,23 @@ button.ghost.restart{margin-top:18px}
 @media (max-width:400px){
   .found{padding:26px 22px 20px}
 }
+
+/* ---------- 記事ごとの比較（Wave 2-A） ---------- */
+/* 列が増えても崩れないよう、はみ出したら表だけ横スクロールさせる */
+.cmp-wrap{overflow-x:auto;margin:0 0 12px}
+.cmp{border-collapse:collapse;width:100%;min-width:420px;font-size:12.5px}
+.cmp th,.cmp td{
+  border-bottom:1px solid var(--line);
+  padding:9px 12px;text-align:right;white-space:nowrap;
+}
+.cmp thead th{
+  color:var(--ink-faint);font-size:10.5px;letter-spacing:.1em;font-weight:400;
+  border-bottom:1px solid var(--line);
+}
+.cmp tbody th{text-align:left;color:var(--ink-soft);font-weight:400}
+.cmp td{color:var(--ink);font-variant-numeric:tabular-nums}
+/* 比較してよい指標だけ強調する。参考値と同じ見た目にすると誤読される */
+.cmp .cmp-key td{font-weight:700}
+.cmp .cmp-key th{color:var(--ink)}
+.cmp .cmp-ref{color:var(--ink-faint)}
+.cmp td em{color:var(--ink-faint);font-size:10.5px;font-style:normal;margin-left:4px}

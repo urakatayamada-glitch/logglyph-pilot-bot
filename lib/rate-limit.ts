@@ -94,7 +94,7 @@ export async function checkPublicPilotCapacity(
   if (!supabase) return { allowed: true };
 
   const dayStartJst = startOfJstDayIso();
-  const isCohort = src === PUBLIC_PILOT.src;
+  const isCohort = Boolean(src) && PUBLIC_PILOT.srcs.includes(src as string);
 
   /*
    * 数を集めるところと、判定するところを分けている。
@@ -128,7 +128,7 @@ export async function checkPublicPilotCapacity(
     const { data } = await supabase
       .from("sessions")
       .select("client_token")
-      .eq("src", PUBLIC_PILOT.src);
+      .in("src", PUBLIC_PILOT.srcs as unknown as string[]);
     const tokens = new Set(
       ((data ?? []) as Array<{ client_token: string | null }>)
         .map((r) => r.client_token)
@@ -140,7 +140,10 @@ export async function checkPublicPilotCapacity(
 
   const cohortToday = isCohort
     ? await countSessions((q) =>
-        q.eq("src", PUBLIC_PILOT.src).gte("started_at", dayStartJst)
+        q.in("src", PUBLIC_PILOT.srcs as unknown as string[]).gte(
+          "started_at",
+          dayStartJst
+        )
       )
     : 0;
   const clientToday = isCohort
@@ -153,7 +156,7 @@ export async function checkPublicPilotCapacity(
     src,
     { globalToday, cohortPeople, alreadyInCohort, cohortToday, clientToday },
     {
-      cohortSrc: PUBLIC_PILOT.src,
+      cohortSrcs: PUBLIC_PILOT.srcs,
       cohortTotalPeople: PUBLIC_PILOT.cohortTotalPeople,
       cohortDailySessions: PUBLIC_PILOT.cohortDailySessions,
       cohortSessionsPerClientPerDay: PUBLIC_PILOT.cohortSessionsPerClientPerDay,

@@ -25,6 +25,7 @@ import {
   medianMinutes,
   decideCapacity,
   countValueResponsesPerPerson,
+  entryDenominator,
 } from "../lib/found.ts";
 
 test("client_token は UUID v4 だけを通す", () => {
@@ -185,7 +186,7 @@ test("中央値", () => {
    ということをしなくて済むように、判定だけを純関数にして境界を確認する。
 */
 const LIMITS = {
-  cohortSrc: "note_wave2",
+  cohortSrcs: ["note_wave2", "note_wave2_a2"],
   cohortTotalPeople: 30,
   cohortDailySessions: 30,
   cohortSessionsPerClientPerDay: 2,
@@ -285,6 +286,26 @@ test("枠：全体のヒューズは src を問わず先に効く", () => {
   );
 });
 
+test("枠：記事が増えても上限は1つ（複数srcが同じコホート）", () => {
+  /*
+   * 記事ごとに src を分けるが、上限はコホート全体で1つ。
+   * 単一値にしていると、新しい記事の src が上限の対象外になり
+   * 枠を無視して入れてしまう。
+   */
+  const full = {
+    globalToday: 0,
+    cohortPeople: 30,
+    alreadyInCohort: false,
+    cohortToday: 0,
+    clientToday: 0,
+  };
+  assert.equal(decideCapacity("note_wave2", full, LIMITS), "cohort_total");
+  assert.equal(decideCapacity("note_wave2_a2", full, LIMITS), "cohort_total");
+  // コホート外は対象にならない
+  assert.equal(decideCapacity("other_article", full, LIMITS), null);
+  assert.equal(decideCapacity(null, full, LIMITS), null);
+});
+
 test("枠：コホート以外はコホート上限の対象にならない", () => {
   // 運営のテストや知人コホートが、note の枠が埋まったせいで止まらないこと
   const full = {
@@ -316,4 +337,33 @@ test("1タップ評価は1人1票。開き直して押しても増えない", ()
     { fit: 1, off: 1, unknown: 0 }
   );
   assert.deepEqual(countValueResponsesPerPerson([]), { fit: 0, off: 0, unknown: 0 });
+});
+
+test("枠で断られただけの人は Entry Pull の分母から外す", () => {
+  /*
+   * 到達と拒否は別テーブルなので、断られた人も「到達」に残っている。
+   * 分母に残すと、興味がなくて始めなかった人と混ざって
+   * Entry Pull が実態より低く出る。
+   */
+  const r = entryDenominator(
+    ["a", "b", "c", "d"],   // 到達した4人
+    ["a", "c"],              // セッションを持っている2人
+    ["b", "c"]               // 枠で断られた2人
+  );
+  // b は断られただけ → 除外。c は断られたが会話できている → 分母に残す
+  assert.equal(r.people, 3);
+  assert.equal(r.excluded, 1);
+});
+
+test("Entry Pull の分母：拒否も重複もない素直な場合", () => {
+  assert.deepEqual(entryDenominator(["a", "b"], ["a"], []), {
+    people: 2,
+    excluded: 0,
+  });
+  assert.deepEqual(entryDenominator([], [], []), { people: 0, excluded: 0 });
+  // 同じ人が何度も到達しても1人
+  assert.deepEqual(entryDenominator(["a", "a", "a"], ["a"], []), {
+    people: 1,
+    excluded: 0,
+  });
 });
