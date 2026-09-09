@@ -196,7 +196,8 @@ export type CapacityReason =
 
 export interface CapacityLimits {
   cohortSrc: string;
-  cohortTotalSessions: number;
+  /** 人数（ユニーク client_token）の上限。セッション数ではない */
+  cohortTotalPeople: number;
   cohortDailySessions: number;
   cohortSessionsPerClientPerDay: number;
   globalDailySessions: number;
@@ -205,8 +206,15 @@ export interface CapacityLimits {
 export interface CapacityCounts {
   /** サービス全体の当日セッション数（src を問わない） */
   globalToday: number;
-  /** コホートの累計セッション数 */
-  cohortTotal: number;
+  /**
+   * コホートに参加した人数（ユニーク client_token）。
+   * セッション数ではない。記事の「先着30名」と一致させるため。
+   * ただし、すでに参加済みの人が2本目を始める場合は枠を消費しないので、
+   * 呼び出し側はその人を数に含めたうえで alreadyInCohort を立てる。
+   */
+  cohortPeople: number;
+  /** この端末がすでにコホートに参加済みか。参加済みなら総数上限で断らない */
+  alreadyInCohort: boolean;
   /** コホートの当日セッション数 */
   cohortToday: number;
   /** この端末の当日セッション数 */
@@ -231,7 +239,14 @@ export function decideCapacity(
 ): CapacityReason | null {
   if (counts.globalToday >= limits.globalDailySessions) return "global_daily";
   if (src !== limits.cohortSrc) return null;
-  if (counts.cohortTotal >= limits.cohortTotalSessions) return "cohort_total";
+  /*
+   * すでに枠に入っている人は、総数上限では断らない。
+   * 断ってしまうと「30人目が埋まった瞬間、29人目までの人も
+   * 2本目を始められなくなる」ことになり、人数で数える意味がなくなる。
+   */
+  if (!counts.alreadyInCohort && counts.cohortPeople >= limits.cohortTotalPeople) {
+    return "cohort_total";
+  }
   if (counts.cohortToday >= limits.cohortDailySessions) return "cohort_daily";
   if (counts.clientToday >= limits.cohortSessionsPerClientPerDay) {
     return "per_client_daily";

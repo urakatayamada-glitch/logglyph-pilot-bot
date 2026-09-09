@@ -76,10 +76,10 @@ function avg(values: number[]) {
 export default async function AdminHome({
   searchParams,
 }: {
-  searchParams: Promise<{ v?: string }>;
+  searchParams: Promise<{ v?: string; s?: string }>;
 }) {
   await requireAdmin();
-  const { v: versionParam } = await searchParams;
+  const { v: versionParam, s: srcParam } = await searchParams;
 
   if (!isAdminConfigured()) {
     return (
@@ -247,14 +247,39 @@ export default async function AdminHome({
 
   const stage1Since = entryRows.length > 0 ? entryRows[0].viewed_at : null;
 
-  // Stage 1 が動き出してからのセッションだけを3層の対象にする
-  const stage1Sessions = stage1Since
-    ? allRows.filter((r) => r.started_at >= stage1Since)
-    : [];
+  /*
+   * 流入元の絞り込み。
+   *
+   * note読者と知人と運営のテストが同じ数字に混ざると、どちらも読めなくなる。
+   * 実際 Wave 2 初日は「記事を開いた43人 → LOGGLYPHに到達30人（70%）」という
+   * 記事のCTRとしてはあり得ない値が出た。混在が原因。
+   *
+   *   all      … 全部
+   *   <src値>  … その流入元だけ（例: note_wave2）
+   *   none     … src が付いていないもの（知人コホート・運営のテスト）
+   */
+  const srcValues = Array.from(
+    new Set(
+      [
+        ...entryRows.map((r) => r.src),
+        ...allRows.map((r) => r.src),
+      ].filter((v): v is string => Boolean(v))
+    )
+  ).sort();
+  const selectedSrc = srcParam ?? "all";
+  const matchesSrc = (v: string | null) =>
+    selectedSrc === "all" ? true : selectedSrc === "none" ? !v : v === selectedSrc;
 
-  const entryPeople = new Set(entryRows.map((r) => r.client_token)).size;
+  const entryScoped = entryRows.filter((r) => matchesSrc(r.src));
+
+  // Stage 1 が動き出してからのセッションだけを3層の対象にする
+  const stage1Sessions = (
+    stage1Since ? allRows.filter((r) => r.started_at >= stage1Since) : []
+  ).filter((r) => matchesSrc(r.src));
+
+  const entryPeople = new Set(entryScoped.map((r) => r.client_token)).size;
   const acceptedPeople = new Set(
-    entryRows.filter((r) => r.accepted_at).map((r) => r.client_token)
+    entryScoped.filter((r) => r.accepted_at).map((r) => r.client_token)
   ).size;
 
   const layers = threeLayerPull(
@@ -339,6 +364,15 @@ export default async function AdminHome({
     byCategory.set(key, cur);
   }
 
+  // 版チップを押しても流入元の選択が消えないようにする
+  const srcQuery = selectedSrc === "all" ? "" : `s=${encodeURIComponent(selectedSrc)}&`;
+  const versionQuery =
+    selectedVersion && selectedVersion !== "all"
+      ? `v=${encodeURIComponent(selectedVersion)}&`
+      : selectedVersion === "all"
+        ? "v=all&"
+        : "";
+
   return (
     <main className="admin">
       <div className="admin-head">
@@ -358,14 +392,14 @@ export default async function AdminHome({
         {versions.map((v) => (
           <Link
             key={v}
-            href={`/admin?v=${encodeURIComponent(v)}`}
+            href={`/admin?${srcQuery}v=${encodeURIComponent(v)}`}
             className={selectedVersion === v ? "vchip on" : "vchip"}
           >
             {v}
           </Link>
         ))}
         <Link
-          href="/admin?v=all"
+          href={`/admin?${srcQuery}v=all`}
           className={selectedVersion === "all" ? "vchip on" : "vchip"}
         >
           All
@@ -409,6 +443,33 @@ export default async function AdminHome({
           3層の引き。Wave 2 以降はここを主に見る。
           ============================================================ */}
       <h2>3層の引き（Entry / Conversation / Return）</h2>
+      {/*
+        流入元の絞り込み。この節にだけ効く（版フィルタは効かない）。
+        混ぜると note読者と知人のどちらの数字も読めなくなる。
+      */}
+      <div className="admin-filter">
+        <Link
+          href={`/admin?${versionQuery}s=all`}
+          className={selectedSrc === "all" ? "vchip on" : "vchip"}
+        >
+          全体
+        </Link>
+        {srcValues.map((v) => (
+          <Link
+            key={v}
+            href={`/admin?${versionQuery}s=${encodeURIComponent(v)}`}
+            className={selectedSrc === v ? "vchip on" : "vchip"}
+          >
+            {v}
+          </Link>
+        ))}
+        <Link
+          href={`/admin?${versionQuery}s=none`}
+          className={selectedSrc === "none" ? "vchip on" : "vchip"}
+        >
+          知人・運営（src なし）
+        </Link>
+      </div>
       {stage1Since ? (
         <>
           <section className="stats">
@@ -448,6 +509,15 @@ export default async function AdminHome({
             {" "}{stage1Sessions.length} セッション。
             <strong>prompt_version では絞っていません</strong>
             （Stage 1 の有無が別の時代を作るため）。上の版フィルタはこの節に効きません。
+            いま表示している流入元：
+            <strong>
+              {selectedSrc === "all"
+                ? "全体（note読者・知人・運営が混ざっています）"
+                : selectedSrc === "none"
+                  ? "知人・運営（src なし）"
+                  : selectedSrc}
+            </strong>
+            。
             <br />
             「枠で断った」は上限に達して会話を始められなかった人です。
             興味がなくて始めなかった人と混ぜると Entry Pull が壊れるため、

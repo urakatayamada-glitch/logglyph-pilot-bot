@@ -186,45 +186,78 @@ test("中央値", () => {
 */
 const LIMITS = {
   cohortSrc: "note_wave2",
-  cohortTotalSessions: 30,
+  cohortTotalPeople: 30,
   cohortDailySessions: 30,
-  cohortSessionsPerClientPerDay: 1,
+  cohortSessionsPerClientPerDay: 2,
   globalDailySessions: 50,
 };
-const ZERO = { globalToday: 0, cohortTotal: 0, cohortToday: 0, clientToday: 0 };
+const ZERO = {
+  globalToday: 0,
+  cohortPeople: 0,
+  alreadyInCohort: false,
+  cohortToday: 0,
+  clientToday: 0,
+};
 
 test("枠：まだ空いていれば通す", () => {
   assert.equal(decideCapacity("note_wave2", ZERO, LIMITS), null);
   assert.equal(decideCapacity(null, ZERO, LIMITS), null);
 });
 
-test("枠：コホート総数の境界は「達した時点」で断る", () => {
+test("枠：総数は『人数』で数える。30人目までが参加者", () => {
   assert.equal(
-    decideCapacity("note_wave2", { ...ZERO, cohortTotal: 29 }, LIMITS),
+    decideCapacity("note_wave2", { ...ZERO, cohortPeople: 29 }, LIMITS),
     null
   );
-  // 30件目は通らない。30を「上限」と読む（29件目までが参加者）
   assert.equal(
-    decideCapacity("note_wave2", { ...ZERO, cohortTotal: 30 }, LIMITS),
+    decideCapacity("note_wave2", { ...ZERO, cohortPeople: 30 }, LIMITS),
     "cohort_total"
   );
   assert.equal(
-    decideCapacity("note_wave2", { ...ZERO, cohortTotal: 31 }, LIMITS),
+    decideCapacity("note_wave2", { ...ZERO, cohortPeople: 31 }, LIMITS),
     "cohort_total"
   );
 });
 
-test("枠：コホート日次と端末ごと日次", () => {
+test("枠：すでに参加済みの人は、満員でも2本目を始められる", () => {
+  /*
+   * ここを間違えると「30人目が埋まった瞬間、それまでの29人も
+   * 2本目を始められなくなる」ことになり、人数で数える意味がなくなる。
+   */
+  assert.equal(
+    decideCapacity(
+      "note_wave2",
+      { ...ZERO, cohortPeople: 30, alreadyInCohort: true },
+      LIMITS
+    ),
+    null
+  );
+  // ただし1日の回数上限は、参加済みでも効く
+  assert.equal(
+    decideCapacity(
+      "note_wave2",
+      { ...ZERO, cohortPeople: 30, alreadyInCohort: true, clientToday: 2 },
+      LIMITS
+    ),
+    "per_client_daily"
+  );
+});
+
+test("枠：1人1日2回まで（初日の per_client_daily 3件を受けて 1 → 2 に変更）", () => {
+  assert.equal(decideCapacity("note_wave2", { ...ZERO, clientToday: 1 }, LIMITS), null);
+  assert.equal(
+    decideCapacity("note_wave2", { ...ZERO, clientToday: 2 }, LIMITS),
+    "per_client_daily"
+  );
+});
+
+test("枠：コホート日次", () => {
   assert.equal(
     decideCapacity("note_wave2", { ...ZERO, cohortToday: 30 }, LIMITS),
     "cohort_daily"
   );
   assert.equal(
-    decideCapacity("note_wave2", { ...ZERO, clientToday: 1 }, LIMITS),
-    "per_client_daily"
-  );
-  assert.equal(
-    decideCapacity("note_wave2", { ...ZERO, clientToday: 0 }, LIMITS),
+    decideCapacity("note_wave2", { ...ZERO, cohortToday: 29 }, LIMITS),
     null
   );
 });
@@ -239,7 +272,13 @@ test("枠：全体のヒューズは src を問わず先に効く", () => {
   assert.equal(
     decideCapacity(
       "note_wave2",
-      { globalToday: 50, cohortTotal: 30, cohortToday: 30, clientToday: 1 },
+      {
+        globalToday: 50,
+        cohortPeople: 30,
+        alreadyInCohort: false,
+        cohortToday: 30,
+        clientToday: 2,
+      },
       LIMITS
     ),
     "global_daily"
@@ -248,7 +287,13 @@ test("枠：全体のヒューズは src を問わず先に効く", () => {
 
 test("枠：コホート以外はコホート上限の対象にならない", () => {
   // 運営のテストや知人コホートが、note の枠が埋まったせいで止まらないこと
-  const full = { globalToday: 10, cohortTotal: 30, cohortToday: 30, clientToday: 5 };
+  const full = {
+    globalToday: 10,
+    cohortPeople: 30,
+    alreadyInCohort: false,
+    cohortToday: 30,
+    clientToday: 5,
+  };
   assert.equal(decideCapacity(null, full, LIMITS), null);
   assert.equal(decideCapacity("other_source", full, LIMITS), null);
   assert.equal(decideCapacity("note_wave2", full, LIMITS), "cohort_total");

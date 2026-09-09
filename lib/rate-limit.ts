@@ -116,10 +116,28 @@ export async function checkPublicPilotCapacity(
   }
 
   const globalToday = await countSessions((q) => q.gte("started_at", dayStartJst));
-  // コホート以外は全体のヒューズだけを見るので、余計な問い合わせをしない
-  const cohortTotal = isCohort
-    ? await countSessions((q) => q.eq("src", PUBLIC_PILOT.src))
-    : 0;
+
+  /*
+   * コホートは「人数」で数える。件数ではなく client_token のユニーク数。
+   * 記事に「先着30名」と書いているため、名で一致させる。
+   * Pilot規模（〜数百行）なので、取得してから重複を除いて数える。
+   */
+  let cohortPeople = 0;
+  let alreadyInCohort = false;
+  if (isCohort) {
+    const { data } = await supabase
+      .from("sessions")
+      .select("client_token")
+      .eq("src", PUBLIC_PILOT.src);
+    const tokens = new Set(
+      ((data ?? []) as Array<{ client_token: string | null }>)
+        .map((r) => r.client_token)
+        .filter((t): t is string => Boolean(t))
+    );
+    cohortPeople = tokens.size;
+    alreadyInCohort = tokens.has(clientToken);
+  }
+
   const cohortToday = isCohort
     ? await countSessions((q) =>
         q.eq("src", PUBLIC_PILOT.src).gte("started_at", dayStartJst)
@@ -133,10 +151,10 @@ export async function checkPublicPilotCapacity(
 
   const reason = decideCapacity(
     src,
-    { globalToday, cohortTotal, cohortToday, clientToday },
+    { globalToday, cohortPeople, alreadyInCohort, cohortToday, clientToday },
     {
       cohortSrc: PUBLIC_PILOT.src,
-      cohortTotalSessions: PUBLIC_PILOT.cohortTotalSessions,
+      cohortTotalPeople: PUBLIC_PILOT.cohortTotalPeople,
       cohortDailySessions: PUBLIC_PILOT.cohortDailySessions,
       cohortSessionsPerClientPerDay: PUBLIC_PILOT.cohortSessionsPerClientPerDay,
       globalDailySessions: PUBLIC_PILOT.globalDailySessions,

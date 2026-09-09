@@ -59,15 +59,32 @@ export const PUBLIC_PILOT = {
   enabled: process.env.PUBLIC_PILOT_ENABLED === "1",
   /** この src を持つセッションだけがコホート上限の対象 */
   src: process.env.PUBLIC_PILOT_SRC || "note_wave2",
-  cohortTotalSessions: numFromEnv("PUBLIC_PILOT_TOTAL", 30),
+  /**
+   * コホートの上限。**セッション数ではなく人数（ユニーク client_token）**で数える。
+   *
+   * 記事に「先着30名」と書いているため、ここは名で一致させる。
+   * セッション数で数えると、1人が2回話した時点で枠が2つ減り、
+   * 実際には20人前後で締まってしまい、書いたことと合わなくなる。
+   */
+  cohortTotalPeople: numFromEnv("PUBLIC_PILOT_TOTAL", 30),
   cohortDailySessions: numFromEnv("PUBLIC_PILOT_DAILY", 30),
-  cohortSessionsPerClientPerDay: numFromEnv("PUBLIC_PILOT_PER_CLIENT_DAILY", 1),
+  /**
+   * 1人が1日に始められる会話の数。
+   *
+   * 既定を 1 から 2 に上げた。Wave 2 初日に per_client_daily で3件断っており、
+   * そのうち少なくとも2件は記事から来た他人だった。
+   * 記事から来た人はその場の一度きりで、「もう一回やりたい」は
+   * こちらが得られる最良の信号にあたる。1日1回はもともと
+   * 5日間の知人テスト用のルールで、他人には合っていない。
+   */
+  cohortSessionsPerClientPerDay: numFromEnv("PUBLIC_PILOT_PER_CLIENT_DAILY", 2),
   globalDailySessions: numFromEnv("PUBLIC_PILOT_GLOBAL_DAILY", 50),
 } as const;
 
 /** 上限に達したときに画面へ出す文言（会話は始めず、APIも呼ばない） */
 export const CAPACITY_MESSAGES = {
   cohortTotal: "今回のテスト参加枠は終了しました。また別の機会に開きます。",
+  perClientDailyFull: "今日はここまでにしておこう。また明日話そう。",
   cohortDaily: "本日のテスト参加枠は終了しました。また明日開きます。",
   perClientDaily: "今日はここまでにしておこう。また明日話そう。",
   globalDaily: "いまアクセスが集中しています。少し時間を置いて開いてみてください。",
