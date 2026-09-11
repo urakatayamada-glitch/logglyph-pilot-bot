@@ -2,6 +2,8 @@
 
 import { ReactNode, useState } from "react";
 import FuturePreview from "./FuturePreview";
+import MemoryReceipt from "./MemoryReceipt";
+import { ExperienceVariant } from "../lib/experience";
 import Wave1Survey, { Wave1Answers } from "./Wave1Survey";
 
 /**
@@ -29,6 +31,9 @@ export default function ConversationComplete({
   crisis,
   memoryCount,
   recentMemories,
+  experienceVariant,
+  sessionId,
+  clientToken,
   restartSlot,
 }: {
   oneLineMemory: string | null;
@@ -37,6 +42,15 @@ export default function ConversationComplete({
   crisis: boolean;
   memoryCount: number | null;
   recentMemories: string[];
+  /**
+   * 体験条件。会話そのものは同一で、ここに何を出すかだけが変わる。
+   *   baseline          … Future Preview（この先3つが育ちます／開発中）
+   *   memory_receipt_v1 … Memory Receipt（今日ひとつ残りました／確定）
+   */
+  experienceVariant: ExperienceVariant;
+  /** Memory Receipt の表示記録に使う。baseline では使わない。 */
+  sessionId: string | null;
+  clientToken: string | null;
   /**
    * 「別の話をする」。最後の段階に来るまで出さない。
    * 評価の段階で出すと、Future Preview と追加設問を飛ばして
@@ -47,6 +61,7 @@ export default function ConversationComplete({
   const [rating, setRating] = useState<number | null>(null);
   const [again, setAgain] = useState<boolean | null>(null);
   const [stage, setStage] = useState<Stage>("rating");
+  const isReceipt = experienceVariant === "memory_receipt_v1";
 
   // 危機対応で終了した会話では、評価もログ表示も出さない
   if (crisis) return null;
@@ -59,7 +74,15 @@ export default function ConversationComplete({
 
   return (
     <div className="complete">
-      {oneLineMemory && (
+      {/*
+        memory_receipt_v1 では、評価が終わったあとは Memory Receipt が
+        同じ一行を抱えるので、このカードは出さない。
+        両方出すと同じ文が画面に2回並ぶ。
+
+        ⚠ 評価の段階では baseline と同じように出す。ここを変えると
+          「話しやすかった / また話したい」の条件が baseline と揃わなくなる。
+      */}
+      {oneLineMemory && !(isReceipt && stage !== "rating") && (
         <div className="memory-card">
           <div className="memory-label">今日のログ</div>
           <div className="memory-body">{oneLineMemory}</div>
@@ -110,10 +133,24 @@ export default function ConversationComplete({
 
       {stage !== "rating" && (
         <>
-          <FuturePreview
-            memoryCount={memoryCount}
-            recentMemories={recentMemories}
-          />
+          {/*
+            ⚠ 位置は変えない。評価のあとに出す。
+              評価より前に出すと「また話したい」が Wave 0 の 59% と
+              比較できなくなる（Future Preview をここに置いた元の理由と同じ）。
+          */}
+          {isReceipt ? (
+            <MemoryReceipt
+              oneLineMemory={oneLineMemory}
+              memoryCount={memoryCount}
+              sessionId={sessionId}
+              clientToken={clientToken}
+            />
+          ) : (
+            <FuturePreview
+              memoryCount={memoryCount}
+              recentMemories={recentMemories}
+            />
+          )}
           {stage === "preview" ? (
             <div className="rating-actions">
               <button className="primary" onClick={() => setStage("survey")}>

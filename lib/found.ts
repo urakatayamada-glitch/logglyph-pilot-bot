@@ -589,3 +589,109 @@ export function foundCampaignFunnel(args: {
     internalExcluded,
   };
 }
+
+/* ============================================================
+   体験条件の比較（baseline / memory_receipt_v1）
+   ============================================================
+
+   ⚠ これは A/B ランダムテストではない。導入前後の variant 比較である。
+     記事1の読者と、フラグを入れたあとの読者は同じ集団ではない。
+     n も小さい。統計的効果としては扱わず、
+     Positive / Negative Signal としてのみ読むこと。
+
+   ⚠ Return の起点は、両条件で同じものを使う。
+     Memory Receipt を見たかどうかを起点にすると baseline に対応物が無く、
+     比較が成立しない。したがって起点は「記憶が出た最初のセッションの終了時刻」。
+     Memory Receipt Viewed はファネルの1段であって起点ではない。
+*/
+
+export interface VariantSessionRow {
+  session_id: string;
+  client_token: string | null;
+  started_at: string;
+  completed_at: string | null;
+  memory_found: boolean;
+  experience_variant: string | null;
+}
+
+export interface VariantFunnel {
+  people: number;
+  completed: number;
+  memoryFound: number;
+  receiptViewed: number;
+  sameDayContinuation: number;
+  nextDayReturn: number;
+  newMemoryFound: number;
+}
+
+function emptyVariantFunnel(): VariantFunnel {
+  return {
+    people: 0,
+    completed: 0,
+    memoryFound: 0,
+    receiptViewed: 0,
+    sameDayContinuation: 0,
+    nextDayReturn: 0,
+    newMemoryFound: 0,
+  };
+}
+
+/**
+ * 体験条件ごとのファネルを人単位で組み立てる。
+ *
+ * 1人が両方の条件にまたがらないよう、その人の「最初のセッションの条件」で
+ * 所属を決める。フラグを切り替えた前後に跨って使った人は、切り替え前の条件に入る。
+ * （跨った人を両方に数えると、どちらの数字も読めなくなる）
+ */
+export function variantFunnels(args: {
+  sessions: VariantSessionRow[];
+  receiptSessionIds: Iterable<string>;
+  internalTokens: Iterable<string>;
+  includeInternal: boolean;
+}): Record<string, VariantFunnel> {
+  const receipts = new Set(args.receiptSessionIds);
+  const internal = new Set(args.internalTokens);
+
+  const byToken = new Map<string, VariantSessionRow[]>();
+  for (const s of args.sessions) {
+    if (!s.client_token) continue;
+    if (isDeletedToken(s.client_token)) continue;
+    if (!args.includeInternal && internal.has(s.client_token)) continue;
+    const list = byToken.get(s.client_token) ?? [];
+    list.push(s);
+    byToken.set(s.client_token, list);
+  }
+
+  const out: Record<string, VariantFunnel> = {};
+  const bucket = (key: string) => (out[key] ??= emptyVariantFunnel());
+
+  for (const list of byToken.values()) {
+    const ordered = [...list].sort((a, b) =>
+      a.started_at < b.started_at ? -1 : a.started_at > b.started_at ? 1 : 0
+    );
+    const variant = ordered[0].experience_variant ?? "baseline";
+    const f = bucket(variant);
+
+    f.people += 1;
+    if (ordered.some((s) => s.completed_at)) f.completed += 1;
+    if (ordered.some((s) => receipts.has(s.session_id))) f.receiptViewed += 1;
+
+    const firstMemory = ordered.find((s) => s.memory_found);
+    if (!firstMemory) continue;
+    f.memoryFound += 1;
+
+    // 起点。終了時刻が取れなければ開始時刻で代用する
+    const origin = firstMemory.completed_at ?? firstMemory.started_at;
+    const after = ordered.filter((s) => s.started_at > origin);
+    if (after.length === 0) continue;
+
+    // 1人は1回だけ数える。両方あるときは Next-Day を採る（強いシグナル）
+    const isNextDay = after.some((s) => isNextDayReturnJst(origin, s.started_at));
+    if (isNextDay) f.nextDayReturn += 1;
+    else f.sameDayContinuation += 1;
+
+    if (after.some((s) => s.memory_found)) f.newMemoryFound += 1;
+  }
+
+  return out;
+}

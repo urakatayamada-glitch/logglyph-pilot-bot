@@ -31,7 +31,13 @@ import {
   firstSessionAfter,
   foundCampaignFunnel,
   FOUND_CAMPAIGNS,
+  variantFunnels,
 } from "../lib/found.ts";
+import {
+  resolveExperienceVariant,
+  isExperienceVariant,
+  EXPERIENCE_VARIANTS,
+} from "../lib/experience.ts";
 
 test("client_token は UUID v4 だけを通す", () => {
   assert.equal(isClientToken("3f2504e0-4f89-41d3-9a0c-0305e82c3301"), true);
@@ -784,4 +790,178 @@ test("foundCampaignFunnel : 今回の想定（6名送付・まだ誰も見てい
   assert.equal(f.viewed, 0);
   assert.equal(f.postFoundSession, 0);
   assert.equal(f.nextDayReturn, 0);
+});
+
+/* ============================================================
+   体験条件（experience_variant）
+   ============================================================ */
+
+test("resolveExperienceVariant : フラグが 1 のときだけ v1", () => {
+  assert.equal(resolveExperienceVariant("1"), "memory_receipt_v1");
+  assert.equal(resolveExperienceVariant("0"), "baseline");
+  assert.equal(resolveExperienceVariant(""), "baseline");
+  assert.equal(resolveExperienceVariant(undefined), "baseline");
+  // "true" では有効にしない。値は "1" だけと決めている
+  assert.equal(resolveExperienceVariant("true"), "baseline");
+});
+
+test("isExperienceVariant : 知らない値は通さない", () => {
+  assert.equal(isExperienceVariant("baseline"), true);
+  assert.equal(isExperienceVariant("memory_receipt_v1"), true);
+  assert.equal(isExperienceVariant("memory_receipt_v2"), false);
+  assert.equal(isExperienceVariant(null), false);
+  assert.equal(EXPERIENCE_VARIANTS.length, 2);
+});
+
+function vs(
+  id: string,
+  token: string,
+  startedAt: string,
+  extra: Partial<{
+    completed_at: string | null;
+    memory_found: boolean;
+    experience_variant: string | null;
+  }> = {}
+) {
+  return {
+    session_id: id,
+    client_token: token,
+    started_at: startedAt,
+    completed_at:
+      extra.completed_at === undefined ? startedAt : extra.completed_at,
+    memory_found: extra.memory_found ?? true,
+    experience_variant: extra.experience_variant ?? "baseline",
+  };
+}
+
+test("variantFunnels : 起点は「記憶が出た最初のセッションの終了時刻」", () => {
+  const f = variantFunnels({
+    sessions: [
+      // 9/11 10:00 JST 開始 → 10:30 JST 終了
+      vs("s1", "t1", "2026-09-11T01:00:00Z", {
+        completed_at: "2026-09-11T01:30:00Z",
+        experience_variant: "memory_receipt_v1",
+      }),
+      // 9/12 09:00 JST。翌日なので Next-Day Return
+      vs("s2", "t1", "2026-09-12T00:00:00Z", {
+        experience_variant: "memory_receipt_v1",
+      }),
+    ],
+    receiptSessionIds: ["s1"],
+    internalTokens: [],
+    includeInternal: false,
+  });
+  const v = f.memory_receipt_v1;
+  assert.equal(v.people, 1);
+  assert.equal(v.memoryFound, 1);
+  assert.equal(v.receiptViewed, 1);
+  assert.equal(v.nextDayReturn, 1);
+  assert.equal(v.sameDayContinuation, 0);
+  assert.equal(v.newMemoryFound, 1);
+});
+
+test("variantFunnels : 同じ日に続けただけは Next-Day にしない", () => {
+  const f = variantFunnels({
+    sessions: [
+      vs("s1", "t1", "2026-09-11T01:00:00Z", {
+        completed_at: "2026-09-11T01:30:00Z",
+      }),
+      // 同じ 9/11 JST のうちにもう1本（Wave 1 で誤認したパターン）
+      vs("s2", "t1", "2026-09-11T11:00:00Z"),
+    ],
+    receiptSessionIds: [],
+    internalTokens: [],
+    includeInternal: false,
+  });
+  assert.equal(f.baseline.sameDayContinuation, 1);
+  assert.equal(f.baseline.nextDayReturn, 0);
+});
+
+test("variantFunnels : Receipt を見たことは Return の起点にしない", () => {
+  // receipt を見ていない baseline の人も、同じ起点で Return を判定できる
+  const f = variantFunnels({
+    sessions: [
+      vs("s1", "t1", "2026-09-11T01:00:00Z", {
+        completed_at: "2026-09-11T01:30:00Z",
+      }),
+      vs("s2", "t1", "2026-09-12T00:00:00Z"),
+    ],
+    receiptSessionIds: [], // 1件も無い
+    internalTokens: [],
+    includeInternal: false,
+  });
+  assert.equal(f.baseline.receiptViewed, 0);
+  assert.equal(f.baseline.nextDayReturn, 1, "receiptが無くてもReturnは数える");
+});
+
+test("variantFunnels : 1人が両方の条件にまたがらない", () => {
+  // フラグ切り替えを跨いで使った人。最初のセッションの条件に入れる
+  const f = variantFunnels({
+    sessions: [
+      vs("s1", "t1", "2026-09-11T01:00:00Z", {
+        completed_at: "2026-09-11T01:30:00Z",
+        experience_variant: "baseline",
+      }),
+      vs("s2", "t1", "2026-09-12T00:00:00Z", {
+        experience_variant: "memory_receipt_v1",
+      }),
+    ],
+    receiptSessionIds: ["s2"],
+    internalTokens: [],
+    includeInternal: false,
+  });
+  assert.equal(f.baseline.people, 1);
+  assert.equal(f.memory_receipt_v1, undefined, "両方には数えない");
+  assert.equal(f.baseline.nextDayReturn, 1);
+});
+
+test("variantFunnels : 運営テストと削除済みトークンを除く", () => {
+  const sessions = [
+    vs("s1", "t1", "2026-09-11T01:00:00Z"),
+    vs("s2", "t2", "2026-09-11T01:00:00Z"),
+    vs("s3", "deleted:abc", "2026-09-11T01:00:00Z"),
+  ];
+  const excluded = variantFunnels({
+    sessions,
+    receiptSessionIds: [],
+    internalTokens: ["t2"],
+    includeInternal: false,
+  });
+  assert.equal(excluded.baseline.people, 1, "運営も削除済みも除く");
+
+  const included = variantFunnels({
+    sessions,
+    receiptSessionIds: [],
+    internalTokens: ["t2"],
+    includeInternal: true,
+  });
+  assert.equal(included.baseline.people, 2, "削除済みは含めない");
+});
+
+test("variantFunnels : 記憶が出なかった人は Return 判定に入れない", () => {
+  const f = variantFunnels({
+    sessions: [
+      vs("s1", "t1", "2026-09-11T01:00:00Z", { memory_found: false }),
+      vs("s2", "t1", "2026-09-12T00:00:00Z", { memory_found: false }),
+    ],
+    receiptSessionIds: [],
+    internalTokens: [],
+    includeInternal: false,
+  });
+  assert.equal(f.baseline.people, 1);
+  assert.equal(f.baseline.completed, 1);
+  assert.equal(f.baseline.memoryFound, 0);
+  assert.equal(f.baseline.nextDayReturn, 0);
+});
+
+test("variantFunnels : experience_variant が null の行は baseline 扱い", () => {
+  const f = variantFunnels({
+    sessions: [
+      vs("s1", "t1", "2026-09-11T01:00:00Z", { experience_variant: null }),
+    ],
+    receiptSessionIds: [],
+    internalTokens: [],
+    includeInternal: false,
+  });
+  assert.equal(f.baseline.people, 1);
 });

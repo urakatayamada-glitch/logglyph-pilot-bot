@@ -10,6 +10,7 @@ import type { Wave1Answers } from "./Wave1Survey";
 import type { ChatMessage } from "../lib/conversation/phase";
 import type { MemoryTriggerEpisode } from "../lib/episodes";
 import { RECENT_EPISODE_MEMORY } from "../lib/conversation/config";
+import { DEFAULT_VARIANT, ExperienceVariant, isExperienceVariant } from "../lib/experience";
 
 const LS_SESSION = "logglyph.session";
 const LS_ACCEPTED = "logglyph.accepted";
@@ -197,6 +198,12 @@ export default function Conversation({
   /** 流入識別。到達時に確定し、セッション登録まで持ち回る。 */
   const srcRef = useRef<string | null>(null);
   const entryContextRef = useRef<string | null>(null);
+  /**
+   * 体験条件。サーバが決めた値を受け取って保持する。
+   * ⚠ クライアントでは決めない。取れなければ baseline のまま。
+   */
+  const [experienceVariant, setExperienceVariant] =
+    useState<ExperienceVariant>(DEFAULT_VARIANT);
 
   /** 初期化：前回の会話があれば復元、なければEpisodeで開始 */
   useEffect(() => {
@@ -263,10 +270,14 @@ export default function Conversation({
             entryContext: entryContextRef.current,
           }),
         });
+        const data = await res.json().catch(() => null);
         if (res.status === 429) {
-          const data = await res.json();
-          setNotice(data.message ?? "今日はここまでにしておこう。");
+          setNotice(data?.message ?? "今日はここまでにしておこう。");
           setCompleted(true);
+          return;
+        }
+        if (isExperienceVariant(data?.experienceVariant)) {
+          setExperienceVariant(data.experienceVariant);
         }
       } catch {
         /* 登録に失敗しても会話は続行する */
@@ -475,6 +486,9 @@ export default function Conversation({
             crisis={crisis}
             memoryCount={memoryCount}
             recentMemories={recentMemories}
+            experienceVariant={experienceVariant}
+            sessionId={sessionId}
+            clientToken={readLS<string>(LS_CLIENT)}
             restartSlot={
               crisis ? null : (
                 <button className="ghost restart" onClick={restart}>

@@ -418,6 +418,11 @@ button.ghost.restart{margin-top:18px}
 .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(182px,1fr));gap:12px}
 /* カードが1〜2枚のときに横に伸びきらないようにする */
 .stats.compact{grid-template-columns:repeat(auto-fill,minmax(182px,232px));justify-content:start}
+/*
+ * カードの段が続くときに密着しないようにする。
+ * これまでは段のあいだに必ず注釈文が入っていたので表面化しなかった。
+ */
+.stats + .stats{margin-top:12px}
 .stat{
   border:1px solid var(--line-strong);
   border-radius:16px;padding:15px 17px 16px;
@@ -649,6 +654,47 @@ button.ghost.restart{margin-top:18px}
 }
 .future-note{
   color:var(--ink-faint);font-size:11px;line-height:1.9;margin:0;
+}
+
+/* ---------- Memory Receipt（memory_receipt_v1） ---------- */
+/*
+ * baseline の Future Preview と同じ位置・同じ余白に置く。
+ * 差が「どこに出たか」ではなく「何が書いてあるか」だけになるようにする。
+ *
+ * ⚠ 本文は 16px より小さくしないこと。読み手は記憶を読み返している。
+ *   見た目の都合で 14.5px に戻さないこと。
+ */
+.receipt{
+  margin-top:26px;
+  padding-top:22px;
+  border-top:1px solid var(--line);
+}
+.receipt-h{
+  font-size:15px;font-weight:700;color:var(--ink);
+  line-height:1.8;margin:0 0 16px;
+}
+.receipt-mem{
+  background:var(--glass);
+  border:1px solid var(--line);
+  border-radius:13px;
+  padding:14px 16px;
+  font-size:16px;line-height:1.9;color:var(--ink);
+  margin:0 0 16px;
+}
+.receipt-count{
+  font-size:13px;color:var(--ink-soft);margin:0 0 20px;
+}
+.receipt-count b{font-size:20px;font-weight:700;color:var(--ink);margin:0 3px}
+.receipt-note{
+  color:var(--ink-soft);font-size:12.5px;line-height:2;margin:0 0 14px;
+}
+/*
+ * ⚠ --ink-faint(#93a0b0) にしないこと。淡い背景の上で読めなくなる。
+ *   Admin の見出しで一度これをやって「表が出ていない」と誤認させた。
+ *   ここは「LOGGLYPHが何を確かめているか」を伝える、いちばん読ませたい行。
+ */
+.receipt-lead{
+  color:var(--ink-soft);font-size:12.5px;line-height:2;margin:0;
 }
 
 /* ---------- Wave 1 追加評価 ---------- */

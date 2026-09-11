@@ -7,6 +7,11 @@ import {
   hashIp,
 } from "../../../lib/rate-limit";
 import { PROMPT_VERSION } from "../../../lib/conversation/config";
+import {
+  isExperienceVariant,
+  resolveExperienceVariant,
+  DEFAULT_VARIANT,
+} from "../../../lib/experience";
 
 /**
  * セッション開始。
@@ -45,12 +50,27 @@ export async function POST(req: Request) {
      */
     const supabaseForCheck = getSupabaseAdmin();
     let isResume = false;
+    /*
+     * 体験条件。
+     *
+     * ⚠ サーバ側で決める。クライアントからは指定させない。
+     * ⚠ 再開のときは保存済みの値をそのまま使う。会話の途中で
+     *   MEMORY_RECEIPT_ENABLED を切り替えても、そのセッションの条件は変えない。
+     *   変えてしまうと「同じ会話なのに前半と後半で条件が違う」行ができる。
+     */
+    let experienceVariant = resolveExperienceVariant(
+      process.env.MEMORY_RECEIPT_ENABLED
+    );
     if (supabaseForCheck) {
-      const { count } = await supabaseForCheck
+      const { data: existing } = await supabaseForCheck
         .from("sessions")
-        .select("session_id", { count: "exact", head: true })
-        .eq("session_id", sessionId);
-      isResume = (count ?? 0) > 0;
+        .select("session_id, experience_variant")
+        .eq("session_id", sessionId)
+        .maybeSingle();
+      isResume = Boolean(existing);
+      if (existing && isExperienceVariant(existing.experience_variant)) {
+        experienceVariant = existing.experience_variant;
+      }
     }
 
     // Wave 2 の枠チェックを先に見る。
@@ -86,7 +106,11 @@ export async function POST(req: Request) {
     const supabase = getSupabaseAdmin();
     if (!supabase) {
       // DB未設定でも会話自体は成立させる（Pilotを止めない）
-      return NextResponse.json({ ok: true, persisted: false });
+      return NextResponse.json({
+        ok: true,
+        persisted: false,
+        experienceVariant,
+      });
     }
 
     const { error } = await supabase.from("sessions").upsert(
@@ -100,15 +124,20 @@ export async function POST(req: Request) {
         episode_source_type: episode?.source_type ?? null,
         src: cohortSrc,
         ...(isResume ? {} : { entry_context: arrivalContext }),
+        experience_variant: experienceVariant,
         status: "active",
       },
       { onConflict: "session_id" }
     );
 
     if (error) throw error;
-    return NextResponse.json({ ok: true, persisted: true });
+    return NextResponse.json({ ok: true, persisted: true, experienceVariant });
   } catch (error) {
     console.error("session start failed", error);
-    return NextResponse.json({ ok: false }, { status: 500 });
+    // 体験条件が取れなくても会話は続ける。既定は baseline。
+    return NextResponse.json(
+      { ok: false, experienceVariant: DEFAULT_VARIANT },
+      { status: 500 }
+    );
   }
 }

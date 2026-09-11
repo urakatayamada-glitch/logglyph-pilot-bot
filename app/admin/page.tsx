@@ -24,7 +24,9 @@ import {
   FOUND_CAMPAIGNS,
   ELAPSED_BUCKETS,
   ELAPSED_BUCKET_LABELS,
+  variantFunnels,
 } from "../../lib/found";
+import { EXPERIENCE_VARIANTS, VARIANT_LABELS } from "../../lib/experience";
 import { PUBLIC_PILOT } from "../../lib/conversation/config";
 
 export const dynamic = "force-dynamic";
@@ -36,6 +38,7 @@ interface SessionRow {
   client_token: string | null;
   src: string | null;
   entry_context: string | null;
+  experience_variant: string | null;
   content_deleted_at: string | null;
   status: string;
   memory_trigger_category: string | null;
@@ -229,7 +232,8 @@ export default async function AdminHome({
        「最初の entry_view の時刻」以降のセッションだけを対象にする。
        prompt_version では絞らない（Stage 1 の有無が別の時代を作るため）。
   */
-  const [entryRes, rejectRes, foundViewRes, noteRes, internalRes] = await Promise.all([
+  const [entryRes, rejectRes, foundViewRes, noteRes, internalRes, receiptRes] =
+    await Promise.all([
     supabase
       .from("entry_views")
       .select("client_token, viewed_at, accepted_at, src")
@@ -245,6 +249,7 @@ export default async function AdminHome({
       .from("found_notes")
       .select("session_id, approved, campaign_key, first_sent_at"),
     supabase.from("internal_clients").select("client_token"),
+    supabase.from("receipt_views").select("session_id"),
   ]);
 
   const entryRows = (entryRes.data ?? []) as Array<{
@@ -272,6 +277,9 @@ export default async function AdminHome({
   }>;
   const internalTokens = ((internalRes.data ?? []) as Array<{ client_token: string }>)
     .map((r) => r.client_token);
+  const receiptSessionIds = (
+    (receiptRes.data ?? []) as Array<{ session_id: string }>
+  ).map((r) => r.session_id);
 
   const stage1Since = entryRows.length > 0 ? entryRows[0].viewed_at : null;
 
@@ -400,6 +408,27 @@ export default async function AdminHome({
    * Memory Found（記憶が出た人）と Found Eligible（配布できる人）は別物。
    * Eligible は approved な観察文があり、0発話でなく、campaign に属する人だけ。
    */
+  /* ============================================================
+     体験条件の比較（baseline / memory_receipt_v1）
+     ============================================================
+     ⚠ A/B ランダムテストではない。導入前後の比較である。
+     流入元の絞り込み（上の src チップ）がそのまま効く。
+  */
+  const variantScoped = allRows.filter((r) => matchesSrc(r.src));
+  const variants = variantFunnels({
+    sessions: variantScoped.map((r) => ({
+      session_id: r.session_id,
+      client_token: r.client_token,
+      started_at: r.started_at,
+      completed_at: r.completed_at,
+      memory_found: r.memory_found,
+      experience_variant: r.experience_variant,
+    })),
+    receiptSessionIds,
+    internalTokens,
+    includeInternal,
+  });
+
   const memoryFoundPeople = new Set(
     allRows
       .filter((r) => r.memory_found && r.client_token && !isDeletedToken(r.client_token))
@@ -794,6 +823,72 @@ export default async function AdminHome({
         まだ分離していない値です。
       </p>
 
+      {/* ---------- 体験条件の比較 ---------- */}
+      <h2>体験条件の比較（baseline / memory_receipt_v1）</h2>
+      <p className="admin-note">
+        会話そのものは両条件で完全に同一です（v1.5.1 / gpt-4o / Episode / Prompt は不変）。
+        違うのは会話が終わったあとに何を出すかだけです。
+        <br />
+        baseline … Future Preview（この先3つが育ちます／現在開発中）
+        <br />
+        memory_receipt_v1 … Memory Receipt（今日ひとつ残りました／確定した記録）
+      </p>
+
+      <div className="cmp-wrap">
+        <table className="cmp">
+          <thead>
+            <tr>
+              <th />
+              {EXPERIENCE_VARIANTS.map((v) => (
+                <th key={v}>{VARIANT_LABELS[v]}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {(
+              [
+                ["対象者", (f: typeof variants[string]) => f?.people],
+                ["Session Completed", (f: typeof variants[string]) => f?.completed],
+                ["Memory Found", (f: typeof variants[string]) => f?.memoryFound],
+                [
+                  "Memory Receipt Viewed",
+                  (f: typeof variants[string]) => f?.receiptViewed,
+                ],
+                [
+                  "Same-Day Continuation",
+                  (f: typeof variants[string]) => f?.sameDayContinuation,
+                ],
+                ["Next-Day Return", (f: typeof variants[string]) => f?.nextDayReturn],
+                ["New Memory Found", (f: typeof variants[string]) => f?.newMemoryFound],
+              ] as const
+            ).map(([label, pick]) => (
+              <tr key={label} className={label === "Next-Day Return" ? "cmp-key" : ""}>
+                <th>{label}</th>
+                {EXPERIENCE_VARIANTS.map((v) => (
+                  <td key={v}>{pick(variants[v]) ?? 0}</td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <p className="admin-note">
+        Primary KPI は <b>Next-Day Return</b>（JSTの日付が変わってから戻った人）です。
+        Memory Receipt Viewed / Same-Day Continuation / New Memory Found は Secondary。
+        <br />
+        ⚠ <b>これは A/B ランダムテストではありません。</b>
+        フラグを入れた時刻を境にした前後比較です。記事1の読者と、それ以降の読者は
+        同じ集団ではありません。n も小さいため、統計的効果とは扱わず
+        <b>Positive / Negative Signal</b> として読んでください。
+        <br />
+        Return の起点は両条件で同じ「記憶が出た最初のセッションの終了時刻」です。
+        Memory Receipt を見たかどうかは起点にしていません（baseline に対応物が無く、
+        比較が成立しなくなるため）。
+        <br />
+        1人が両条件にまたがらないよう、その人の最初のセッションの条件で所属を決めています。
+      </p>
+
       {/* ---------- Found Campaign ---------- */}
       <h2>Found Campaign : {campaignLabel}</h2>
       <p className="admin-note">
@@ -827,17 +922,17 @@ export default async function AdminHome({
           note="記憶が出た人（全体・参考値）"
         />
         <Stat
-          label="Found Eligible"
+          label="Known Eligible"
           value={String(campaign.eligible)}
           note="承認済み観察文あり／0発話でない／campaign対象"
         />
         <Stat
-          label="Sent"
-          value={String(campaign.sent)}
-          note="first_sent_at 記録あり"
+          label="Campaign Message Sent"
+          value={campaign.sent > 0 ? "1" : "0"}
+          note={`共通URLを1回、グループ全体へ（対象 ${campaign.sent}人）`}
         />
         <Stat
-          label="Viewed"
+          label="Eligible Viewed"
           value={pct(campaign.viewed, campaign.sent)}
           note={`${campaign.viewed} / ${campaign.sent}人`}
         />
@@ -892,8 +987,15 @@ export default async function AdminHome({
         9/11 10:00 閲覧 → 9/11 20:00 会話 は経過10時間でも Same-Day Continuation です。
         Wave 1 の「同じ日に何度も使ったのを再訪と誤認した」を繰り返さないためです。
         <br />
-        Post-Found 以降の分母は「閲覧した人」です。送付済みでも未閲覧の人は
+        Post-Found 以降の分母は「閲覧した人」です。配信対象でも未閲覧の人は
         Return 判定に入れていません。
+        <br />
+        ⚠ <b>個別送付ではありません。</b>client_token は誰のものか記録していないため、
+        個人を指定して送ることはできません。共通URLをグループ全体へ1回送り、
+        そのうち記憶を持つ人が Known Eligible です。
+        <br />
+        ⚠ 会話したときと別の端末・ブラウザで開いた人は「記録がありません」になります。
+        Eligible Viewed は実態より少なく出ます。
         {!includeInternal && campaign.internalExcluded > 0 && (
           <>
             <br />
