@@ -190,7 +190,12 @@ export default function Found() {
 function FoundFooter() {
   return (
     <footer className="found-foot">
-      <a className="about-link" href="/">
+      {/*
+        ⚠ ?from=found は「Foundから直接戻った」ことを記録するためだけの印。
+          src は上書きしない。Return 判定の必須条件にもしない
+          （Foundを閉じて翌日ブックマークから戻った人も Return に数える）。
+      */}
+      <a className="about-link" href="/?from=found">
         LOGGLYPHに戻る
       </a>
       <DeleteRecords />

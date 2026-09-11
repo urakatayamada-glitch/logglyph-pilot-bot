@@ -26,6 +26,11 @@ import {
   decideCapacity,
   countValueResponsesPerPerson,
   entryDenominator,
+  isNextDayReturnJst,
+  elapsedBucket,
+  firstSessionAfter,
+  foundCampaignFunnel,
+  FOUND_CAMPAIGNS,
 } from "../lib/found.ts";
 
 test("client_token は UUID v4 だけを通す", () => {
@@ -366,4 +371,417 @@ test("Entry Pull の分母：拒否も重複もない素直な場合", () => {
     people: 1,
     excluded: 0,
   });
+});
+
+/* ============================================================
+   Found Campaign と Return 判定
+   ============================================================ */
+
+test("isNextDayReturnJst : 経過時間ではなくJSTの日付で判定する", () => {
+  // 経過20分でも日付が変わっていれば Next-Day Return
+  assert.equal(
+    isNextDayReturnJst("2026-09-11T14:50:00Z", "2026-09-11T15:10:00Z"),
+    true,
+    "9/11 23:50 JST → 9/12 00:10 JST は Next-Day"
+  );
+  // 経過10時間でも同じ日なら Same-Day
+  assert.equal(
+    isNextDayReturnJst("2026-09-11T01:00:00Z", "2026-09-11T11:00:00Z"),
+    false,
+    "9/11 10:00 JST → 9/11 20:00 JST は Same-Day"
+  );
+  // 前に戻るのは Return ではない
+  assert.equal(
+    isNextDayReturnJst("2026-09-12T01:00:00Z", "2026-09-11T01:00:00Z"),
+    false
+  );
+  // 2日空いても Next-Day Return（「翌日以降」の意味）
+  assert.equal(
+    isNextDayReturnJst("2026-09-11T01:00:00Z", "2026-09-14T01:00:00Z"),
+    true
+  );
+});
+
+test("elapsedBucket : 境界", () => {
+  assert.equal(elapsedBucket(0), "le10m");
+  assert.equal(elapsedBucket(10), "le10m");
+  assert.equal(elapsedBucket(11), "le1h");
+  assert.equal(elapsedBucket(60), "le1h");
+  assert.equal(elapsedBucket(61), "le24h");
+  assert.equal(elapsedBucket(60 * 24), "le24h");
+  assert.equal(elapsedBucket(60 * 24 + 1), "le72h");
+  assert.equal(elapsedBucket(60 * 72), "le72h");
+  assert.equal(elapsedBucket(60 * 72 + 1), "gt72h");
+});
+
+test("firstSessionAfter : 閲覧より後の最初の1本だけを採る", () => {
+  assert.equal(
+    firstSessionAfter("2026-09-11T01:00:00Z", [
+      "2026-09-10T01:00:00Z",
+      "2026-09-12T01:00:00Z",
+      "2026-09-11T05:00:00Z",
+    ]),
+    "2026-09-11T05:00:00Z"
+  );
+  assert.equal(firstSessionAfter("2026-09-11T01:00:00Z", []), null);
+  assert.equal(
+    firstSessionAfter("2026-09-11T01:00:00Z", ["2026-09-10T01:00:00Z"]),
+    null
+  );
+});
+
+test("FOUND_CAMPAIGNS : 今回の配布キーが存在する", () => {
+  assert.ok(FOUND_CAMPAIGNS.some((c) => c.key === "wave1_found_return_01"));
+});
+
+/* ---------- foundCampaignFunnel ---------- */
+
+const CAMPAIGN = "wave1_found_return_01";
+
+function sess(
+  id: string,
+  token: string,
+  startedAt: string,
+  extra: Partial<{
+    user_message_count: number;
+    memory_found: boolean;
+    entry_context: string | null;
+  }> = {}
+) {
+  return {
+    session_id: id,
+    client_token: token,
+    started_at: startedAt,
+    user_message_count: extra.user_message_count ?? 5,
+    memory_found: extra.memory_found ?? true,
+    entry_context: extra.entry_context ?? null,
+  };
+}
+
+test("foundCampaignFunnel : Eligible は campaign / approved / 記憶 / 0発話で絞る", () => {
+  const sessions = [
+    sess("s1", "t1", "2026-09-01T01:00:00Z"),
+    sess("s2", "t2", "2026-09-01T01:00:00Z"),
+    sess("s3", "t3", "2026-09-01T01:00:00Z", { memory_found: false }),
+    sess("s4", "t4", "2026-09-01T01:00:00Z", { user_message_count: 0 }),
+    sess("s5", "t5", "2026-09-01T01:00:00Z"),
+  ];
+  const notes = [
+    { session_id: "s1", approved: true, campaign_key: CAMPAIGN, first_sent_at: null },
+    // 未承認は Eligible ではない
+    { session_id: "s2", approved: false, campaign_key: CAMPAIGN, first_sent_at: null },
+    // 記憶なし
+    { session_id: "s3", approved: true, campaign_key: CAMPAIGN, first_sent_at: null },
+    // 0発話
+    { session_id: "s4", approved: true, campaign_key: CAMPAIGN, first_sent_at: null },
+    // 別のcampaign
+    { session_id: "s5", approved: true, campaign_key: "other", first_sent_at: null },
+  ];
+  const f = foundCampaignFunnel({
+    campaignKey: CAMPAIGN,
+    notes,
+    sessions,
+    views: [],
+    internalTokens: [],
+    includeInternal: false,
+  });
+  assert.equal(f.eligible, 1);
+  assert.equal(f.sent, 0, "first_sent_at が無いうちは Sent に数えない");
+});
+
+test("foundCampaignFunnel : Sent は first_sent_at がある人だけ", () => {
+  const sessions = [
+    sess("s1", "t1", "2026-09-01T01:00:00Z"),
+    sess("s2", "t2", "2026-09-01T01:00:00Z"),
+  ];
+  const notes = [
+    {
+      session_id: "s1",
+      approved: true,
+      campaign_key: CAMPAIGN,
+      first_sent_at: "2026-09-11T00:00:00Z",
+    },
+    { session_id: "s2", approved: true, campaign_key: CAMPAIGN, first_sent_at: null },
+  ];
+  const f = foundCampaignFunnel({
+    campaignKey: CAMPAIGN,
+    notes,
+    sessions,
+    views: [],
+    internalTokens: [],
+    includeInternal: false,
+  });
+  assert.equal(f.eligible, 2);
+  assert.equal(f.sent, 1);
+});
+
+test("foundCampaignFunnel : 送付前の閲覧を起点にしない", () => {
+  const sessions = [sess("s1", "t1", "2026-09-01T01:00:00Z")];
+  const notes = [
+    {
+      session_id: "s1",
+      approved: true,
+      campaign_key: CAMPAIGN,
+      first_sent_at: "2026-09-11T00:00:00Z",
+    },
+  ];
+  // 送付より前（運営の動作確認）の閲覧しかない
+  const f = foundCampaignFunnel({
+    campaignKey: CAMPAIGN,
+    notes,
+    sessions,
+    views: [
+      { client_token: "t1", viewed_at: "2026-09-05T00:00:00Z", value_response: "fit" },
+    ],
+    internalTokens: [],
+    includeInternal: false,
+  });
+  assert.equal(f.viewed, 0);
+  assert.equal(f.valueCounts.fit, 0, "送付前の評価は campaign の票にしない");
+});
+
+test("foundCampaignFunnel : 未閲覧の人は Return 判定に入れない", () => {
+  // t2 は送付済みだが /found を開いていない。開いていないのに翌日会話している。
+  const sessions = [
+    sess("s1", "t1", "2026-09-01T01:00:00Z"),
+    sess("s2", "t2", "2026-09-01T01:00:00Z"),
+    sess("s2b", "t2", "2026-09-12T01:00:00Z"),
+  ];
+  const notes = [
+    {
+      session_id: "s1",
+      approved: true,
+      campaign_key: CAMPAIGN,
+      first_sent_at: "2026-09-11T00:00:00Z",
+    },
+    {
+      session_id: "s2",
+      approved: true,
+      campaign_key: CAMPAIGN,
+      first_sent_at: "2026-09-11T00:00:00Z",
+    },
+  ];
+  const f = foundCampaignFunnel({
+    campaignKey: CAMPAIGN,
+    notes,
+    sessions,
+    views: [
+      { client_token: "t1", viewed_at: "2026-09-11T02:00:00Z", value_response: null },
+    ],
+    internalTokens: [],
+    includeInternal: false,
+  });
+  assert.equal(f.sent, 2);
+  assert.equal(f.viewed, 1);
+  assert.equal(
+    f.postFoundSession,
+    0,
+    "t2 の翌日会話は Found を見ていないので数えない"
+  );
+});
+
+test("foundCampaignFunnel : Same-Day と Next-Day を取り違えない", () => {
+  const notes = [
+    {
+      session_id: "s1",
+      approved: true,
+      campaign_key: CAMPAIGN,
+      first_sent_at: "2026-09-11T00:00:00Z",
+    },
+    {
+      session_id: "s2",
+      approved: true,
+      campaign_key: CAMPAIGN,
+      first_sent_at: "2026-09-11T00:00:00Z",
+    },
+  ];
+  const sessions = [
+    sess("s1", "t1", "2026-09-01T01:00:00Z"),
+    // 9/11 10:00 JST 閲覧 → 9/11 20:00 JST 会話（経過10時間だが同日）
+    sess("s1b", "t1", "2026-09-11T11:00:00Z"),
+    sess("s2", "t2", "2026-09-01T01:00:00Z"),
+    // 9/11 23:50 JST 閲覧 → 9/12 00:10 JST 会話（経過20分だが翌日）
+    sess("s2b", "t2", "2026-09-11T15:10:00Z"),
+  ];
+  const f = foundCampaignFunnel({
+    campaignKey: CAMPAIGN,
+    notes,
+    sessions,
+    views: [
+      { client_token: "t1", viewed_at: "2026-09-11T01:00:00Z", value_response: "fit" },
+      { client_token: "t2", viewed_at: "2026-09-11T14:50:00Z", value_response: "fit" },
+    ],
+    internalTokens: [],
+    includeInternal: false,
+  });
+  assert.equal(f.postFoundSession, 2);
+  assert.equal(f.sameDayContinuation, 1);
+  assert.equal(f.nextDayReturn, 1);
+  // Diagnostic は経過時間で入る（Return の判定とは別軸）
+  assert.equal(f.buckets.le10m, 0);
+  assert.equal(f.buckets.le1h, 1, "20分の方");
+  assert.equal(f.buckets.le24h, 1, "10時間の方");
+  assert.equal(f.fitAndNextDay, 1);
+  assert.equal(f.fitPeople, 2);
+});
+
+test("foundCampaignFunnel : 同じ人は1回だけ数え、Next-Day を優先する", () => {
+  const notes = [
+    {
+      session_id: "s1",
+      approved: true,
+      campaign_key: CAMPAIGN,
+      first_sent_at: "2026-09-11T00:00:00Z",
+    },
+  ];
+  const sessions = [
+    sess("s1", "t1", "2026-09-01T01:00:00Z"),
+    sess("s1b", "t1", "2026-09-11T02:00:00Z"), // 同日
+    sess("s1c", "t1", "2026-09-12T02:00:00Z", { entry_context: "found" }), // 翌日
+  ];
+  const f = foundCampaignFunnel({
+    campaignKey: CAMPAIGN,
+    notes,
+    sessions,
+    views: [
+      { client_token: "t1", viewed_at: "2026-09-11T01:00:00Z", value_response: null },
+      // 再閲覧。起点はリセットしない
+      { client_token: "t1", viewed_at: "2026-09-11T23:00:00Z", value_response: null },
+    ],
+    internalTokens: [],
+    includeInternal: false,
+  });
+  assert.equal(f.postFoundSession, 1);
+  assert.equal(f.sameDayContinuation, 0);
+  assert.equal(f.nextDayReturn, 1);
+  assert.equal(f.directFromFound, 1);
+  assert.equal(f.newMemoryFound, 1);
+});
+
+test("foundCampaignFunnel : entry_context は Return の必須条件ではない", () => {
+  const notes = [
+    {
+      session_id: "s1",
+      approved: true,
+      campaign_key: CAMPAIGN,
+      first_sent_at: "2026-09-11T00:00:00Z",
+    },
+  ];
+  const sessions = [
+    sess("s1", "t1", "2026-09-01T01:00:00Z"),
+    // ブックマークから戻ったので ?from=found が付いていない
+    sess("s1b", "t1", "2026-09-12T02:00:00Z", { entry_context: null }),
+  ];
+  const f = foundCampaignFunnel({
+    campaignKey: CAMPAIGN,
+    notes,
+    sessions,
+    views: [
+      { client_token: "t1", viewed_at: "2026-09-11T01:00:00Z", value_response: null },
+    ],
+    internalTokens: [],
+    includeInternal: false,
+  });
+  assert.equal(f.nextDayReturn, 1, "?from=found が無くても Return に数える");
+  assert.equal(f.directFromFound, 0, "Direct は別指標");
+});
+
+test("foundCampaignFunnel : 運営テストは明示登録した人だけを除外する", () => {
+  const notes = [
+    {
+      session_id: "s1",
+      approved: true,
+      campaign_key: CAMPAIGN,
+      first_sent_at: "2026-09-11T00:00:00Z",
+    },
+    {
+      session_id: "s2",
+      approved: true,
+      campaign_key: CAMPAIGN,
+      first_sent_at: "2026-09-11T00:00:00Z",
+    },
+  ];
+  const sessions = [
+    sess("s1", "t1", "2026-09-01T01:00:00Z"),
+    sess("s2", "t2", "2026-09-01T01:00:00Z"),
+    sess("s2b", "t2", "2026-09-12T02:00:00Z"),
+  ];
+  const views = [
+    { client_token: "t1", viewed_at: "2026-09-11T01:00:00Z", value_response: null },
+    { client_token: "t2", viewed_at: "2026-09-11T01:00:00Z", value_response: "fit" },
+  ];
+  const excluded = foundCampaignFunnel({
+    campaignKey: CAMPAIGN,
+    notes,
+    sessions,
+    views,
+    internalTokens: ["t2"],
+    includeInternal: false,
+  });
+  assert.equal(excluded.eligible, 1);
+  assert.equal(excluded.sent, 1);
+  assert.equal(excluded.nextDayReturn, 0);
+  assert.equal(excluded.internalExcluded, 1);
+
+  const included = foundCampaignFunnel({
+    campaignKey: CAMPAIGN,
+    notes,
+    sessions,
+    views,
+    internalTokens: ["t2"],
+    includeInternal: true,
+  });
+  assert.equal(included.eligible, 2);
+  assert.equal(included.nextDayReturn, 1);
+  assert.equal(included.internalExcluded, 0);
+});
+
+test("foundCampaignFunnel : 1タップ評価は1人1票（再閲覧で水増ししない）", () => {
+  const notes = [
+    {
+      session_id: "s1",
+      approved: true,
+      campaign_key: CAMPAIGN,
+      first_sent_at: "2026-09-11T00:00:00Z",
+    },
+  ];
+  const f = foundCampaignFunnel({
+    campaignKey: CAMPAIGN,
+    notes,
+    sessions: [sess("s1", "t1", "2026-09-01T01:00:00Z")],
+    views: [
+      { client_token: "t1", viewed_at: "2026-09-11T01:00:00Z", value_response: "fit" },
+      { client_token: "t1", viewed_at: "2026-09-11T02:00:00Z", value_response: "fit" },
+      { client_token: "t1", viewed_at: "2026-09-11T03:00:00Z", value_response: "off" },
+    ],
+    internalTokens: [],
+    includeInternal: false,
+  });
+  assert.equal(f.viewed, 1);
+  assert.equal(f.valueCounts.fit, 1);
+  assert.equal(f.valueCounts.off, 0);
+});
+
+test("foundCampaignFunnel : 今回の想定（6名送付・まだ誰も見ていない）", () => {
+  const tokens = ["t1", "t2", "t3", "t4", "t5", "t6"];
+  const sessions = tokens.map((t, i) => sess(`s${i}`, t, "2026-09-01T01:00:00Z"));
+  const notes = tokens.map((_, i) => ({
+    session_id: `s${i}`,
+    approved: true,
+    campaign_key: CAMPAIGN,
+    first_sent_at: "2026-09-11T00:00:00Z",
+  }));
+  const f = foundCampaignFunnel({
+    campaignKey: CAMPAIGN,
+    notes,
+    sessions,
+    views: [],
+    internalTokens: [],
+    includeInternal: false,
+  });
+  assert.equal(f.eligible, 6);
+  assert.equal(f.sent, 6);
+  assert.equal(f.viewed, 0);
+  assert.equal(f.postFoundSession, 0);
+  assert.equal(f.nextDayReturn, 0);
 });

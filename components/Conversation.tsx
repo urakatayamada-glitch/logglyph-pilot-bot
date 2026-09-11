@@ -65,6 +65,25 @@ function readSrc(): string | null {
 }
 
 /**
+ * この到達の文脈。現状は /found から直接戻ってきた場合の "found" だけ。
+ *
+ * ⚠ src と違い localStorage に保存しない。
+ *   保存すると、数日後に別経路で来た会話まで「Foundから戻った」と記録され、
+ *   Direct from Found が実態より多く出る。これは「今回の到達」の属性。
+ *
+ * ⚠ src を上書きしない。上書きすると Wave 2-A の母集団が壊れる。
+ */
+function readEntryContext(): string | null {
+  try {
+    const v = new URLSearchParams(window.location.search).get("from");
+    if (!v || !v.trim()) return null;
+    return v.trim().slice(0, 32);
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Stage 1 : Entry Pull の分母を記録する。
  *
  * これまでは「はじめる」を押すまでサーバーに何も送っていなかったため、
@@ -177,6 +196,7 @@ export default function Conversation({
   const startedRef = useRef(false);
   /** 流入識別。到達時に確定し、セッション登録まで持ち回る。 */
   const srcRef = useRef<string | null>(null);
+  const entryContextRef = useRef<string | null>(null);
 
   /** 初期化：前回の会話があれば復元、なければEpisodeで開始 */
   useEffect(() => {
@@ -188,6 +208,7 @@ export default function Conversation({
      */
     const src = readSrc();
     srcRef.current = src;
+    entryContextRef.current = readEntryContext();
     recordEntry("view", ensureClientToken(), src);
 
     if (readLS<boolean>(LS_ACCEPTED) === true) setAccepted(true);
@@ -234,7 +255,13 @@ export default function Conversation({
         const res = await fetch("/api/session", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ sessionId, clientToken, episode, src: srcRef.current }),
+          body: JSON.stringify({
+            sessionId,
+            clientToken,
+            episode,
+            src: srcRef.current,
+            entryContext: entryContextRef.current,
+          }),
         });
         if (res.status === 429) {
           const data = await res.json();

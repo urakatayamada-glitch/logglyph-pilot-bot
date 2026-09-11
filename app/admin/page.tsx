@@ -20,6 +20,10 @@ import {
   countValueResponsesPerPerson,
   entryDenominator,
   threeLayerPull as computeThreeLayer,
+  foundCampaignFunnel,
+  FOUND_CAMPAIGNS,
+  ELAPSED_BUCKETS,
+  ELAPSED_BUCKET_LABELS,
 } from "../../lib/found";
 import { PUBLIC_PILOT } from "../../lib/conversation/config";
 
@@ -31,6 +35,7 @@ interface SessionRow {
   completed_at: string | null;
   client_token: string | null;
   src: string | null;
+  entry_context: string | null;
   content_deleted_at: string | null;
   status: string;
   memory_trigger_category: string | null;
@@ -88,10 +93,15 @@ function avg(values: number[]) {
 export default async function AdminHome({
   searchParams,
 }: {
-  searchParams: Promise<{ v?: string; s?: string }>;
+  searchParams: Promise<{ v?: string; s?: string; c?: string; i?: string }>;
 }) {
   await requireAdmin();
-  const { v: versionParam, s: srcParam } = await searchParams;
+  const {
+    v: versionParam,
+    s: srcParam,
+    c: campaignParam,
+    i: internalParam,
+  } = await searchParams;
 
   if (!isAdminConfigured()) {
     return (
@@ -219,7 +229,7 @@ export default async function AdminHome({
        「最初の entry_view の時刻」以降のセッションだけを対象にする。
        prompt_version では絞らない（Stage 1 の有無が別の時代を作るため）。
   */
-  const [entryRes, rejectRes, foundViewRes, noteRes] = await Promise.all([
+  const [entryRes, rejectRes, foundViewRes, noteRes, internalRes] = await Promise.all([
     supabase
       .from("entry_views")
       .select("client_token, viewed_at, accepted_at, src")
@@ -233,7 +243,8 @@ export default async function AdminHome({
       .order("viewed_at", { ascending: true }),
     supabase
       .from("found_notes")
-      .select("session_id, approved"),
+      .select("session_id, approved, campaign_key, first_sent_at"),
+    supabase.from("internal_clients").select("client_token"),
   ]);
 
   const entryRows = (entryRes.data ?? []) as Array<{
@@ -256,7 +267,11 @@ export default async function AdminHome({
   const noteRows = (noteRes.data ?? []) as Array<{
     session_id: string;
     approved: boolean;
+    campaign_key: string | null;
+    first_sent_at: string | null;
   }>;
+  const internalTokens = ((internalRes.data ?? []) as Array<{ client_token: string }>)
+    .map((r) => r.client_token);
 
   const stage1Since = entryRows.length > 0 ? entryRows[0].viewed_at : null;
 
@@ -339,46 +354,57 @@ export default async function AdminHome({
     }))
   );
 
-  /* found ファネル。閲覧 → 1タップ → 再訪 → 新規Memory */
-  const foundPeople = new Set(foundViewRows.map((r) => r.client_token)).size;
+  /* ============================================================
+     Found Campaign（Wave 1 / Found Return 01）
+     ============================================================
+
+     ⚠ 母集団は src ではなく campaign_key で定義する。
+       src が null のものには過去の開発・運営セッションが混ざるため、
+       「src なし = Wave 1 知人」とは定義できない。
+
+     ⚠ Post-Found Session 以降は「/found を開いた人」だけが対象。
+       送付済みでも未閲覧の人は Return 判定に入れない。
+       今回の問いは「Foundを見たことが Return Trigger になるか」であり、
+       見ていない人の再訪はその問いに答えない。
+
+     ⚠ Next-Day Return は経過時間ではなく JST の日付で判定する。
+       Wave 1 の「同じ日に何度も使ったのを再訪と誤認した」を繰り返さないため。
+  */
+  const selectedCampaign =
+    campaignParam && FOUND_CAMPAIGNS.some((c) => c.key === campaignParam)
+      ? campaignParam
+      : FOUND_CAMPAIGNS[0].key;
+  const campaignLabel =
+    FOUND_CAMPAIGNS.find((c) => c.key === selectedCampaign)?.label ?? selectedCampaign;
+  const includeInternal = internalParam === "1";
+
+  const foundSessionRows = allRows.map((r) => ({
+    session_id: r.session_id,
+    client_token: r.client_token,
+    started_at: r.started_at,
+    user_message_count: r.user_message_count,
+    memory_found: r.memory_found,
+    entry_context: r.entry_context,
+  }));
+
+  const campaign = foundCampaignFunnel({
+    campaignKey: selectedCampaign,
+    notes: noteRows,
+    sessions: foundSessionRows,
+    views: foundViewRows,
+    internalTokens,
+    includeInternal,
+  });
+
   /*
-   * 1タップ評価は1人1票で数える。
-   * /found を開くたびに found_views の行が増えるため、行を素直に数えると
-   * 同じ人が何度も開いて押した分だけ回答が水増しされる。最初の回答だけを採る。
+   * Memory Found（記憶が出た人）と Found Eligible（配布できる人）は別物。
+   * Eligible は approved な観察文があり、0発話でなく、campaign に属する人だけ。
    */
-  const valueCounts = countValueResponsesPerPerson(foundViewRows);
-
-  const sessionsByToken = new Map<string, SessionRow[]>();
-  for (const r of allRows) {
-    if (!r.client_token) continue;
-    const list = sessionsByToken.get(r.client_token) ?? [];
-    list.push(r);
-    sessionsByToken.set(r.client_token, list);
-  }
-
-  // 1人につき最初の閲覧だけを見る（同じ人が何度も開いても再訪は1回で数える）
-  const firstFoundViewByToken = new Map<string, string>();
-  for (const r of foundViewRows) {
-    if (!firstFoundViewByToken.has(r.client_token)) {
-      firstFoundViewByToken.set(r.client_token, r.viewed_at);
-    }
-  }
-
-  const revisitMinutes: number[] = [];
-  let revisitPeople = 0;
-  let revisitWithNewMemory = 0;
-  for (const [token, viewedAt] of firstFoundViewByToken) {
-    const own = sessionsByToken.get(token) ?? [];
-    const mins = minutesToRevisit(
-      viewedAt,
-      own.map((s) => s.started_at)
-    );
-    if (mins == null) continue;
-    revisitPeople += 1;
-    revisitMinutes.push(mins);
-    const after = own.filter((s) => s.started_at > viewedAt);
-    if (after.some((s) => s.memory_found)) revisitWithNewMemory += 1;
-  }
+  const memoryFoundPeople = new Set(
+    allRows
+      .filter((r) => r.memory_found && r.client_token && !isDeletedToken(r.client_token))
+      .map((r) => r.client_token as string)
+  ).size;
 
   /* ============================================================
      記事ごとの比較（Wave 2-A）
@@ -458,6 +484,25 @@ export default async function AdminHome({
   }
 
   // 版チップを押しても流入元の選択が消えないようにする
+  /**
+   * 現在のURLパラメータを保ったままリンクを作る。
+   * 版・流入元・campaign・運営テスト表示が、片方を押すと片方に戻る事故を防ぐ。
+   */
+  const currentParams: Record<string, string | undefined> = {
+    v: versionParam,
+    s: srcParam,
+    c: campaignParam,
+    i: internalParam,
+  };
+  const adminHref = (next: Record<string, string | undefined>) => {
+    const merged = { ...currentParams, ...next };
+    const q = Object.entries(merged)
+      .filter(([, v]) => v != null && v !== "")
+      .map(([k, v]) => `${k}=${encodeURIComponent(String(v))}`)
+      .join("&");
+    return q ? `/admin?${q}` : "/admin";
+  };
+
   const srcQuery = selectedSrc === "all" ? "" : `s=${encodeURIComponent(selectedSrc)}&`;
   const versionQuery =
     selectedVersion && selectedVersion !== "all"
@@ -749,33 +794,57 @@ export default async function AdminHome({
         まだ分離していない値です。
       </p>
 
-      {/* ---------- found ファネル ---------- */}
-      <h2>/found ファネル</h2>
+      {/* ---------- Found Campaign ---------- */}
+      <h2>Found Campaign : {campaignLabel}</h2>
+      <p className="admin-note">
+        母集団は src ではなく campaign_key で定義しています。src が付いていない
+        セッションには過去の開発・運営テストが混ざるため、「src なし = Wave 1 知人」
+        とは定義できません。Wave 2-A（note読者）とは campaign 単位で完全に分離されます。
+      </p>
+
+      <div className="admin-filter">
+        {FOUND_CAMPAIGNS.map((c) => (
+          <Link
+            key={c.key}
+            className={c.key === selectedCampaign ? "vchip on" : "vchip"}
+            href={adminHref({ c: c.key })}
+          >
+            {c.label}
+          </Link>
+        ))}
+        <Link
+          className={includeInternal ? "vchip on" : "vchip"}
+          href={adminHref({ i: includeInternal ? undefined : "1" })}
+        >
+          運営テストを含む
+        </Link>
+      </div>
+
       <section className="stats compact">
-        <Stat label="閲覧した人" value={String(foundPeople)} note="ユニーク端末" />
         <Stat
-          label="しっくりきた"
-          value={String(valueCounts.fit)}
-          note={`少し違う ${valueCounts.off} / わからない ${valueCounts.unknown}（1人1票）`}
+          label="Memory Found"
+          value={String(memoryFoundPeople)}
+          note="記憶が出た人（全体・参考値）"
         />
         <Stat
-          label="閲覧後に再訪"
-          value={pct(revisitPeople, foundPeople)}
-          note={`${revisitPeople} / ${foundPeople}人`}
+          label="Found Eligible"
+          value={String(campaign.eligible)}
+          note="承認済み観察文あり／0発話でない／campaign対象"
         />
         <Stat
-          label="再訪までの中央値"
-          value={
-            medianMinutes(revisitMinutes) == null
-              ? "—"
-              : `${medianMinutes(revisitMinutes)}分`
-          }
-          note={revisitMinutes.length ? `${revisitMinutes.length}件` : "再訪なし"}
+          label="Sent"
+          value={String(campaign.sent)}
+          note="first_sent_at 記録あり"
         />
         <Stat
-          label="再訪で新規Memory"
-          value={String(revisitWithNewMemory)}
-          note={`再訪 ${revisitPeople}人のうち`}
+          label="Viewed"
+          value={pct(campaign.viewed, campaign.sent)}
+          note={`${campaign.viewed} / ${campaign.sent}人`}
+        />
+        <Stat
+          label="Value Response"
+          value={`fit ${campaign.valueCounts.fit}`}
+          note={`off ${campaign.valueCounts.off} / unknown ${campaign.valueCounts.unknown}（1人1票）`}
         />
         <Stat
           label="観察文"
@@ -783,6 +852,86 @@ export default async function AdminHome({
           note={`未承認 ${pendingNotes}件（未承認は画面に出ません）`}
         />
       </section>
+
+      <section className="stats compact">
+        <Stat
+          label="Post-Found Session"
+          value={pct(campaign.postFoundSession, campaign.viewed)}
+          note={`${campaign.postFoundSession} / 閲覧 ${campaign.viewed}人`}
+        />
+        <Stat
+          label="├ Same-Day Continuation"
+          value={String(campaign.sameDayContinuation)}
+          note="同じJST日付。再訪ではない"
+        />
+        <Stat
+          label="└ Next-Day Return"
+          value={String(campaign.nextDayReturn)}
+          note="Primary KPI。JSTの日付が変わった"
+        />
+        <Stat
+          label="Direct from Found"
+          value={String(campaign.directFromFound)}
+          note="?from=found 経由（補助指標）"
+        />
+        <Stat
+          label="New Memory Found"
+          value={String(campaign.newMemoryFound)}
+          note="閲覧後の会話で新しい記憶が出た人"
+        />
+        <Stat
+          label="fit × Next-Day Return"
+          value={`${campaign.fitAndNextDay} / ${campaign.fitPeople}`}
+          note="fit と答えた人のうち翌日以降に戻った人"
+        />
+      </section>
+
+      <p className="admin-note">
+        ⚠ Next-Day Return は経過時間ではなく JST の日付で判定しています。
+        9/11 23:50 閲覧 → 9/12 00:10 会話 は経過20分でも Next-Day Return、
+        9/11 10:00 閲覧 → 9/11 20:00 会話 は経過10時間でも Same-Day Continuation です。
+        Wave 1 の「同じ日に何度も使ったのを再訪と誤認した」を繰り返さないためです。
+        <br />
+        Post-Found 以降の分母は「閲覧した人」です。送付済みでも未閲覧の人は
+        Return 判定に入れていません。
+        {!includeInternal && campaign.internalExcluded > 0 && (
+          <>
+            <br />
+            運営テストとして明示登録された {campaign.internalExcluded}人を除外しています
+            （自動判定はしていません）。
+          </>
+        )}
+      </p>
+
+      <h2>Diagnostic : 閲覧 → 会話の経過時間</h2>
+      <p className="admin-note">
+        これは診断用です。Return の判定には使いません。
+      </p>
+      <div className="cmp-wrap">
+        <table className="cmp">
+          <thead>
+            <tr>
+              {ELAPSED_BUCKETS.map((b) => (
+                <th key={b}>{ELAPSED_BUCKET_LABELS[b]}</th>
+              ))}
+              <th>中央値</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              {ELAPSED_BUCKETS.map((b) => (
+                <td key={b}>{campaign.buckets[b]}</td>
+              ))}
+              <td>
+                {medianMinutes(campaign.elapsedMinutes) == null
+                  ? "—"
+                  : `${medianMinutes(campaign.elapsedMinutes)}分`}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
       <p className="admin-note">
         /found の案内は Return Pull を測るための Trigger です。案内文に
         「また使ってください」を書かないこと。書くと、その後の再訪が

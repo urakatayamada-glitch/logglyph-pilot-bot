@@ -14,13 +14,24 @@ import { PROMPT_VERSION } from "../../../lib/conversation/config";
  */
 export async function POST(req: Request) {
   try {
-    const { sessionId, clientToken, episode, src } = await req.json();
+    const { sessionId, clientToken, episode, src, entryContext } = await req.json();
     if (!sessionId || !clientToken) {
       return NextResponse.json({ ok: false }, { status: 400 });
     }
 
     const ipHash = hashIp(req);
     const cohortSrc = typeof src === "string" && src.trim() ? src.trim().slice(0, 64) : null;
+    /*
+     * この到達の文脈（現状は /found から直接戻った "found" だけ）。
+     *
+     * ⚠ src とは別のカラムに入れる。src は絶対に上書きしない。
+     * ⚠ 再開（isResume）のときは触らない。会話中のリロードで
+     *   元の文脈が消える／上書きされるのを防ぐ。
+     */
+    const arrivalContext =
+      typeof entryContext === "string" && entryContext.trim()
+        ? entryContext.trim().slice(0, 32)
+        : null;
 
     /*
      * すでに存在するセッションの再登録は、枠もレート制限も数えない。
@@ -88,6 +99,7 @@ export async function POST(req: Request) {
         memory_trigger_category: episode?.category ?? null,
         episode_source_type: episode?.source_type ?? null,
         src: cohortSrc,
+        ...(isResume ? {} : { entry_context: arrivalContext }),
         status: "active",
       },
       { onConflict: "session_id" }

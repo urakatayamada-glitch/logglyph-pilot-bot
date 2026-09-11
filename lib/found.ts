@@ -305,3 +305,287 @@ export function entryDenominator(
   }
   return { people: entry.size - excluded, excluded };
 }
+
+/* ============================================================
+   Found Campaign と Return 判定（Wave 1 / Found Return 01）
+   ============================================================
+
+   Wave 1 で一度踏んだ罠を繰り返さないための設計。
+
+   罠1: 同じ日に何度も使ったのを「再訪」と誤認した。
+        → Return の判定に経過時間を使わない。JSTの日付が変わったかで見る。
+           9/11 23:50 閲覧 → 9/12 00:10 会話 は、経過20分だが Next-Day Return。
+           9/11 10:00 閲覧 → 9/11 20:00 会話 は、経過10時間だが Same-Day。
+        経過時間は Diagnostic として別に出す。
+
+   罠2: 母集団の混在。src が null のものには過去の開発・運営セッションが
+        混ざるため、「src なし = Wave 1 知人」とは定義できない。
+        → Found実験の母集団は campaign_key で定義する。
+
+   罠3: 再閲覧のたびに起点がリセットされると、見るたびに起点が後ろへずれて
+        再訪が永久に検出されない。
+        → 起点は「そのキャンペーンでの最初の閲覧」に固定する。
+*/
+
+export interface FoundCampaign {
+  key: string;
+  label: string;
+}
+
+/** 配布キャンペーンの一覧。DBの campaign_key と一致させること。 */
+export const FOUND_CAMPAIGNS: readonly FoundCampaign[] = [
+  { key: "wave1_found_return_01", label: "Wave 1 / Found Return 01" },
+] as const;
+
+/**
+ * Next-Day Return の判定。
+ *
+ * ⚠ 経過時間ではなく JST の日付で見る。これが Primary KPI。
+ */
+export function isNextDayReturnJst(viewedAt: string, startedAt: string): boolean {
+  const v = jstDateKey(viewedAt);
+  const s = jstDateKey(startedAt);
+  if (!v || !s) return false;
+  return s > v;
+}
+
+export const ELAPSED_BUCKETS = ["le10m", "le1h", "le24h", "le72h", "gt72h"] as const;
+export type ElapsedBucket = (typeof ELAPSED_BUCKETS)[number];
+
+export const ELAPSED_BUCKET_LABELS: Record<ElapsedBucket, string> = {
+  le10m: "≤10分",
+  le1h: "≤1時間",
+  le24h: "≤24時間",
+  le72h: "≤72時間",
+  gt72h: ">72時間",
+};
+
+/** Diagnostic 用。Return の判定には使わない。 */
+export function elapsedBucket(minutes: number): ElapsedBucket {
+  if (minutes <= 10) return "le10m";
+  if (minutes <= 60) return "le1h";
+  if (minutes <= 60 * 24) return "le24h";
+  if (minutes <= 60 * 72) return "le72h";
+  return "gt72h";
+}
+
+/** viewedAt より後の最初の開始時刻。無ければ null。 */
+export function firstSessionAfter(
+  viewedAt: string,
+  starts: string[]
+): string | null {
+  const base = new Date(viewedAt).getTime();
+  if (Number.isNaN(base)) return null;
+  const after = starts
+    .filter((s) => {
+      const t = new Date(s).getTime();
+      return !Number.isNaN(t) && t > base;
+    })
+    .sort();
+  return after[0] ?? null;
+}
+
+export interface FoundNoteRow {
+  session_id: string;
+  approved: boolean;
+  campaign_key: string | null;
+  first_sent_at: string | null;
+}
+
+export interface FoundSessionRow {
+  session_id: string;
+  client_token: string | null;
+  started_at: string;
+  user_message_count: number;
+  memory_found: boolean;
+  entry_context: string | null;
+}
+
+export interface FoundViewRow {
+  client_token: string;
+  viewed_at: string;
+  value_response: string | null;
+}
+
+export interface FoundCampaignFunnel {
+  /** 配布できる条件を満たした人（Memory Found とは別物） */
+  eligible: number;
+  /** 実際に送った人（first_sent_at あり） */
+  sent: number;
+  /** 送ったうち /found を開いた人 */
+  viewed: number;
+  valueCounts: Record<string, number>;
+  /** 閲覧後に会話を開始した人。⚠ 閲覧していない人は対象外 */
+  postFoundSession: number;
+  sameDayContinuation: number;
+  nextDayReturn: number;
+  /** ?from=found から直接戻った人（Return の必須条件ではない） */
+  directFromFound: number;
+  /** 閲覧後の会話で新しい記憶が出た人 */
+  newMemoryFound: number;
+  /** Diagnostic。Return の判定には使わない */
+  buckets: Record<ElapsedBucket, number>;
+  elapsedMinutes: number[];
+  /** fit と答えた人のうち Next-Day Return した人 */
+  fitAndNextDay: number;
+  fitPeople: number;
+  /** 除外した運営テストの人数 */
+  internalExcluded: number;
+}
+
+function emptyBuckets(): Record<ElapsedBucket, number> {
+  return { le10m: 0, le1h: 0, le24h: 0, le72h: 0, gt72h: 0 };
+}
+
+/**
+ * 1つの配布キャンペーンのファネルを組み立てる。
+ *
+ * 母集団の定義（順に絞る）:
+ *   Found Eligible … campaign_key 一致 かつ approved かつ Memory あり かつ 0発話でない
+ *   Sent           … そのうち first_sent_at がある人
+ *   Viewed         … そのうち /found を開いた人
+ *
+ * ⚠ Post-Found Session 以降は「閲覧した人」だけを対象にする。
+ *   送付済みでも未閲覧の人は Return 判定に入れない。
+ *   今回の実験は「Foundを見たことが Return Trigger になるか」を見るもので、
+ *   見ていない人の再訪はその問いに答えない。
+ *
+ * ⚠ 起点は「first_sent_at 以降の最初の閲覧」。
+ *   送付前に運営が開いたテスト閲覧を起点にしないため。
+ */
+export function foundCampaignFunnel(args: {
+  campaignKey: string;
+  notes: FoundNoteRow[];
+  sessions: FoundSessionRow[];
+  views: FoundViewRow[];
+  internalTokens: Iterable<string>;
+  includeInternal: boolean;
+}): FoundCampaignFunnel {
+  const { campaignKey, notes, sessions, views, includeInternal } = args;
+  const internal = new Set(args.internalTokens);
+
+  const sessionById = new Map<string, FoundSessionRow>();
+  const sessionsByToken = new Map<string, FoundSessionRow[]>();
+  for (const s of sessions) {
+    sessionById.set(s.session_id, s);
+    if (!s.client_token) continue;
+    const list = sessionsByToken.get(s.client_token) ?? [];
+    list.push(s);
+    sessionsByToken.set(s.client_token, list);
+  }
+
+  // Eligible と Sent を人単位で集める
+  const eligible = new Set<string>();
+  const sentAtByToken = new Map<string, string>();
+  for (const n of notes) {
+    if (n.campaign_key !== campaignKey) continue;
+    if (!n.approved) continue;
+    const s = sessionById.get(n.session_id);
+    if (!s || !s.client_token) continue;
+    if (!s.memory_found) continue;
+    if (s.user_message_count <= 0) continue;
+    eligible.add(s.client_token);
+    if (n.first_sent_at) {
+      const cur = sentAtByToken.get(s.client_token);
+      // 同じ人に複数のnoteがある場合は、最も早い送付を採る
+      if (!cur || n.first_sent_at < cur) sentAtByToken.set(s.client_token, n.first_sent_at);
+    }
+  }
+
+  let internalExcluded = 0;
+  if (!includeInternal) {
+    for (const t of [...eligible]) {
+      if (internal.has(t)) {
+        eligible.delete(t);
+        sentAtByToken.delete(t);
+        internalExcluded += 1;
+      }
+    }
+  }
+
+  // 起点：first_sent_at 以降の最初の閲覧
+  const viewsByToken = new Map<string, FoundViewRow[]>();
+  for (const v of views) {
+    const list = viewsByToken.get(v.client_token) ?? [];
+    list.push(v);
+    viewsByToken.set(v.client_token, list);
+  }
+
+  const valueCounts: Record<string, number> = { fit: 0, off: 0, unknown: 0 };
+  const buckets = emptyBuckets();
+  const elapsedMinutes: number[] = [];
+
+  let viewed = 0;
+  let postFoundSession = 0;
+  let sameDayContinuation = 0;
+  let nextDayReturn = 0;
+  let directFromFound = 0;
+  let newMemoryFound = 0;
+  let fitAndNextDay = 0;
+  let fitPeople = 0;
+
+  for (const [token, sentAt] of sentAtByToken) {
+    const own = (viewsByToken.get(token) ?? [])
+      .filter((v) => v.viewed_at >= sentAt)
+      .sort((a, b) => (a.viewed_at < b.viewed_at ? -1 : 1));
+    if (own.length === 0) continue;
+    viewed += 1;
+
+    const firstView = own[0].viewed_at;
+
+    // 1タップ評価は1人1票。最初の回答だけ採る
+    const answered = own.find((v) => v.value_response);
+    const isFit = answered?.value_response === "fit";
+    if (answered?.value_response && answered.value_response in valueCounts) {
+      valueCounts[answered.value_response] += 1;
+    }
+    if (isFit) fitPeople += 1;
+
+    const ownSessions = sessionsByToken.get(token) ?? [];
+    const after = ownSessions.filter((s) => s.started_at > firstView);
+    if (after.length === 0) continue;
+
+    postFoundSession += 1;
+
+    /*
+     * 1人は1回だけ数える。
+     * Same-Day と Next-Day の両方がある場合は Next-Day を採る（強いシグナル）。
+     */
+    const isNextDay = after.some((s) => isNextDayReturnJst(firstView, s.started_at));
+    if (isNextDay) {
+      nextDayReturn += 1;
+      if (isFit) fitAndNextDay += 1;
+    } else {
+      sameDayContinuation += 1;
+    }
+
+    if (after.some((s) => s.entry_context === "found")) directFromFound += 1;
+    if (after.some((s) => s.memory_found)) newMemoryFound += 1;
+
+    const mins = minutesToRevisit(
+      firstView,
+      after.map((s) => s.started_at)
+    );
+    if (mins != null) {
+      elapsedMinutes.push(mins);
+      buckets[elapsedBucket(mins)] += 1;
+    }
+  }
+
+  return {
+    eligible: eligible.size,
+    sent: sentAtByToken.size,
+    viewed,
+    valueCounts,
+    postFoundSession,
+    sameDayContinuation,
+    nextDayReturn,
+    directFromFound,
+    newMemoryFound,
+    buckets,
+    elapsedMinutes,
+    fitAndNextDay,
+    fitPeople,
+    internalExcluded,
+  };
+}
