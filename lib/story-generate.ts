@@ -3,7 +3,9 @@ import { MODELS } from "./conversation/config";
 import {
   CATEGORY_SLOTS,
   NARRATIVE_CATEGORIES,
+  SourceTurn,
   ValuedFacet,
+  transcript,
   checkFragment,
   factLines,
   isNarrativeCategory,
@@ -25,18 +27,7 @@ import {
 
 export const STORY_PROMPT_VERSION = "story-v1";
 
-export interface SourceTurn {
-  role: "user" | "assistant";
-  content: string;
-}
-
-/** 会話のうち、本人が話した部分だけを取り出す。FACT の唯一の出どころ */
-export function userText(messages: SourceTurn[]): string {
-  return messages
-    .filter((m) => m.role === "user")
-    .map((m) => m.content)
-    .join("\n");
-}
+export type { SourceTurn };
 
 /* ============================================================
    1. memory_facets（FACT）
@@ -58,9 +49,14 @@ export function userText(messages: SourceTurn[]): string {
  */
 const FACET_SYSTEM = `あなたは、ある人が話した内容から、物語の素材になる事実を拾い出す。
 
+会話は「相手:」と「AI:」の形で渡される。
+
 拾ってよいもの:
-- 本人が実際に口にしたこと。言い換えてよい。逐語でなくてよい
-- 本人が「〜だった」「〜と思った」と言ったことは、そのまま拾ってよい
+- 「相手」が実際に口にしたこと。言い換えてよい。逐語でなくてよい
+- 「相手」が「〜だった」「〜と思った」と言ったことは、そのまま拾ってよい
+- AIの質問は文脈を理解するためだけに使う。AIの発言そのものは拾わない
+  （「そのスーツはどんなときに着てたの？」→「営業だったから」で
+    events.happened に「営業で着ていた」と拾ってよい）
 
 拾ってはいけないもの:
 - 本人が話していないことの追加。推測で埋めない
@@ -149,12 +145,16 @@ async function runFacetPass(
   const client = getOpenAI();
   if (!client) return [];
 
-  const source = [userText(messages), oneLineMemory ?? ""].join("\n").trim();
+  const source = [transcript(messages), `\n今回の記憶: ${oneLineMemory ?? "（なし）"}`]
+    .join("\n")
+    .trim();
   if (!source) return [];
 
   try {
     const res = await client.chat.completions.create({
       model: MODELS.extraction,
+      // 抽出はぶれないほうがよい。既存の構造化抽出と同じ値
+      temperature: 0.2,
       messages: [
         {
           role: "system",
@@ -175,7 +175,14 @@ async function runFacetPass(
       },
     });
     const raw = res.choices[0]?.message?.content;
-    if (!raw) return [];
+    if (!raw) {
+      // ⚠ ここで黙って返していたため、失敗しているのか0件なのか分からなかった
+      console.warn("facet no content", {
+        finish: res.choices[0]?.finish_reason,
+        refusal: Boolean(res.choices[0]?.message?.refusal),
+      });
+      return [];
+    }
     const parsed = JSON.parse(raw) as { facets?: ExtractedFacet[] };
     const facets = Array.isArray(parsed.facets) ? parsed.facets : [];
 
@@ -274,14 +281,16 @@ export async function generateFragment(
   const client = getOpenAI();
   if (!client) return { body: null, rejected: "no_client" };
 
-  const source = [userText(messages), oneLineMemory ?? ""].join("\n").trim();
+  const source = transcript(messages).trim();
   if (!source) return { body: null, rejected: "no_source" };
 
   const known = factLines(facets);
   const unknown = unknownLines(facets);
   const brief = [
-    "【本人が話したこと】",
+    "【会話】（「相手」が本人。AIの発言は文脈のためだけに載せている）",
     source,
+    "",
+    `【今回の記憶】${oneLineMemory ?? "（なし）"}`,
     "",
     "【確かなこと（断定してよいのはこれだけ）】",
     known.length > 0 ? known.join("\n") : "（まだ何も確定していない）",

@@ -20,6 +20,8 @@ import {
   preferredPool,
   scoreFacets,
   unknownLines,
+  transcript,
+  userText,
 } from "../lib/story.ts";
 
 test("カテゴリ定義：5つ、全部に日本語ラベルとスロットがある", () => {
@@ -235,4 +237,27 @@ test("factLines と unknownLines は重ならない（シーンと不足表示�
   assert.ok(known.includes("沖縄の中部"));
   assert.ok(!unknown.includes("どこでのことだったのか"), "確定した項目は不足に出ない");
   assert.ok(unknown.includes("いつ頃のことだったのか"), "未確定の項目は不足に出る");
+});
+
+/* ---------- 抽出に渡す会話の形 ---------- */
+
+test("transcript：AIの発言も話者つきで残す（文脈が消えると拾えない）", () => {
+  const t = transcript([
+    { role: "assistant", content: "そのスーツって、どんなときに着てたの？" },
+    { role: "user", content: "営業だったから、普通に会社に履いていた。" },
+  ]);
+  assert.match(t, /AI: そのスーツって/);
+  assert.match(t, /相手: 営業だったから/);
+});
+
+test("userText：本人の発言だけ（こちらは文脈が落ちる）", () => {
+  const t = userText([
+    { role: "assistant", content: "どんなときに着てたの？" },
+    { role: "user", content: "営業だったから。" },
+  ]);
+  assert.equal(t, "営業だったから。");
+  assert.ok(
+    !t.includes("どんなとき"),
+    "本人の発言だけを抽出に渡すと、何の答えか分からなくなる"
+  );
 });

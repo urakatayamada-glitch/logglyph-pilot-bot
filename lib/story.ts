@@ -357,3 +357,40 @@ export function factLines(facets: ValuedFacet[]): string[] {
 export function unknownLines(facets: ValuedFacet[]): string[] {
   return missingSlots(facets).map((m) => `${CATEGORY_LABELS[m.category]}／${m.missing}`);
 }
+
+
+/* ============================================================
+   会話の書き起こし
+   ============================================================ */
+
+export interface SourceTurn {
+  role: "user" | "assistant";
+  content: string;
+}
+
+/** 会話のうち、本人が話した部分だけを取り出す */
+export function userText(messages: SourceTurn[]): string {
+  return messages
+    .filter((m) => m.role === "user")
+    .map((m) => m.content)
+    .join("\n");
+}
+
+/**
+ * 会話を、話者が分かる形で書き起こす。
+ *
+ * ⚠ 本人の発言だけを渡してはいけない。一度これで facet が0件になった。
+ *
+ *   「営業だったから、普通に会社に履いていた。」だけを渡しても、
+ *   それが何の答えなのか分からない。直前の
+ *   「そのスーツって、どんなときに着てたの？」があって初めて意味を持つ。
+ *
+ *   AIの発言は文脈を与えるためだけに渡す。
+ *   FACT として拾ってよいのは「相手」の発言内容だけ、と指示で縛る。
+ *   （既存の extractStructuredMemory も同じ形で渡している）
+ */
+export function transcript(messages: SourceTurn[]): string {
+  return messages
+    .map((m) => `${m.role === "user" ? "相手" : "AI"}: ${m.content}`)
+    .join("\n");
+}
