@@ -65,6 +65,20 @@ export default function StoryPreview({
       {story.fragment && (
         <>
           <p className="story-sub">今日のシーン</p>
+          {/*
+            ⚠ 導入はシーンの「前」、注意書きは「後ろ」。
+              先に言い訳から入ると、読む前に構えさせてしまう。
+          */}
+          <p className="story-lead">
+            あなたが話してくれた記憶を、
+            <br />
+            ひとつのシーンにしました。
+            <br />
+            <br />
+            記憶が増えるほど、
+            <br />
+            あなたのドラマは少しずつ具体的になっていきます。
+          </p>
           <div className="story-frag">
             {story.fragment.split("\n").map((line, i) => (
               <p key={i}>{line}</p>
@@ -75,7 +89,7 @@ export default function StoryPreview({
               演出と事実が同じものに見えると、本人の記憶が書き換わる。
           */}
           <p className="story-caveat">
-            これはあなたが話した内容をもとにした演出です。事実そのものではありません。
+            会話の内容をもとに、表現を加えて脚本化しています。
           </p>
         </>
       )}

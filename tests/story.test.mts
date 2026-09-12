@@ -16,8 +16,10 @@ import {
   isNarrativeCategory,
   missingSlots,
   neededCategories,
+  factLines,
   preferredPool,
   scoreFacets,
+  unknownLines,
 } from "../lib/story.ts";
 
 test("カテゴリ定義：5つ、全部に日本語ラベルとスロットがある", () => {
@@ -194,4 +196,43 @@ test("preferredPool：不足指定が無ければ従来どおり", () => {
 test("preferredPool：タグ未設定のEpisodeを優先候補に混ぜない", () => {
   const pool = preferredPool(EPISODES, ["setting"]);
   assert.deepEqual(pool.map((e) => e.id), ["a"]);
+});
+
+/* ---------- 生成に渡す「確かなこと」 ---------- */
+
+test("factLines：確定した事実だけを行にする", () => {
+  const lines = factLines([
+    { category: "events", slot: "happened", value: "AIツールの開発を引き受けた" },
+    { category: "setting", slot: "where", value: "" },
+  ]);
+  assert.equal(lines.length, 1);
+  assert.match(lines[0], /出来事・選択/);
+  assert.match(lines[0], /AIツールの開発を引き受けた/);
+});
+
+test("factLines：空なら1行も出さない（埋めさせない）", () => {
+  assert.deepEqual(factLines([]), []);
+});
+
+test("unknownLines：確定していない項目を全部並べる", () => {
+  const un = unknownLines([
+    { category: "events", slot: "happened", value: "開発を引き受けた" },
+  ]);
+  assert.equal(un.length, 14, "15スロット中1つ埋まっているので14");
+  assert.ok(
+    un.some((u) => u.includes("どこでのことだったのか")),
+    "場所が未確定なら、断定しない項目に入る"
+  );
+});
+
+test("factLines と unknownLines は重ならない（シーンと不足表示が矛盾しない）", () => {
+  const facets = [
+    { category: "setting", slot: "where", value: "沖縄の中部" },
+    { category: "events", slot: "happened", value: "海に行った" },
+  ];
+  const known = factLines(facets).join("\n");
+  const unknown = unknownLines(facets).join("\n");
+  assert.ok(known.includes("沖縄の中部"));
+  assert.ok(!unknown.includes("どこでのことだったのか"), "確定した項目は不足に出ない");
+  assert.ok(unknown.includes("いつ頃のことだったのか"), "未確定の項目は不足に出る");
 });

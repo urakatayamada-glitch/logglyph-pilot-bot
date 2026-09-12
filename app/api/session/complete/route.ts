@@ -203,7 +203,12 @@ async function buildStory(
   );
 
   // 4. シーン
-  const { body } = await generateFragment(messages, oneLineMemory);
+  /*
+   * ⚠ 渡すのは「今回のセッションで確定した事実」だけ。
+   *   過去の全 facet を渡すと、別の時期の場所や人物が今日のシーンに混ざる。
+   *   ここに無いことは断定させない（Fact は増やさない）。
+   */
+  const { body } = await generateFragment(messages, oneLineMemory, extracted);
   if (body) {
     const { error } = await supabase.from("story_fragments").upsert(
       {

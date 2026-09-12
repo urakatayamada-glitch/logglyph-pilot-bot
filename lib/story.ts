@@ -313,3 +313,47 @@ export function preferredPool<T extends TaggedEpisode>(
   );
   return hit.length > 0 ? hit : episodes;
 }
+
+/* ============================================================
+   Story Fragment に渡す「断定してよい事実」
+   ============================================================
+
+   ⚠ Product Experience の仕様であって、Hallucination 対策ではない。
+
+     facet に無いことを AI が埋めてしまうと、
+     「まだ見えていないもの」に「どこでのことだったのか」と出ているのに
+     シーンは「自宅の小さなオフィス」と断言する、という矛盾が起きる。
+     実際に起きた（2026-09-12 の本番確認）。
+
+     埋めないことで、記憶が増える → facet が増える → 描写が具体的になる、
+     という体験が成立する。話すほどドラマの解像度が上がる。
+     不足している部分は、Story 上でも余白として残す。
+
+   ⚠ 制限するのは「脚色」ではなく「本人が話していない具体的事実の追加」。
+     比喩・構成・リズム・余韻・視点・再配置は自由。
+*/
+
+export interface ValuedFacet {
+  category: string;
+  slot: string;
+  value: string;
+}
+
+/** 確定した事実を、生成プロンプトに差し込める行にする */
+export function factLines(facets: ValuedFacet[]): string[] {
+  const out: string[] = [];
+  for (const c of NARRATIVE_CATEGORIES) {
+    for (const d of CATEGORY_SLOTS[c]) {
+      const hit = facets.find((f) => f.category === c && f.slot === d.slot);
+      if (hit && hit.value.trim()) {
+        out.push(`${CATEGORY_LABELS[c]}／${d.hint}：${hit.value.trim()}`);
+      }
+    }
+  }
+  return out;
+}
+
+/** 断定してはいけない項目。facet に無いものを明示する */
+export function unknownLines(facets: ValuedFacet[]): string[] {
+  return missingSlots(facets).map((m) => `${CATEGORY_LABELS[m.category]}／${m.missing}`);
+}

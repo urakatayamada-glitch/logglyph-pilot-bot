@@ -3,8 +3,11 @@ import { MODELS } from "./conversation/config";
 import {
   CATEGORY_SLOTS,
   NARRATIVE_CATEGORIES,
+  ValuedFacet,
   checkFragment,
+  factLines,
   isNarrativeCategory,
+  unknownLines,
 } from "./story";
 
 /**
@@ -133,19 +136,38 @@ export async function extractFacets(
    2. story_fragments（DRAMATIZATION）
    ============================================================ */
 
-const FRAGMENT_SYSTEM = `あなたは、ある人が話した記憶をもとに、短いシーンを書く。
+/*
+ * ⚠ 方針は「Fact は増やさない。表現は大胆にしてよい」。
+ *
+ *   制限するのは脚色ではなく、本人が話していない具体的事実の追加。
+ *   埋めてしまうと「まだ見えていないもの」と矛盾し、
+ *   記憶が増えるほど描写が具体的になる、という体験が壊れる。
+ */
+const FRAGMENT_SYSTEM = `あなたは、ある人が話した記憶を、ひとつのシーンとして書く。
 
-守ること:
-- 本人が話していない事実を足さない。固有名詞・数字・因果関係を作らない
-- 感情を断定しない。「絶望していた」「幸せだった」とは書かない。
-  内面に触れるときは「何かを考えていたのかもしれない」のように、断定しない形にする
-- 診断・性格づけをしない
-- 「あなた」と呼びかけない
+【断定してよいのは、下に「確かなこと」として渡された内容だけ】
+
+「確かなこと」に書かれていない次のものを、新しい事実として断定しない。
+  場所 / 日時 / 人物 / 出来事 / 連絡手段 / 天候 / 音 / 身体動作 / 感情
+
+書かれていない部分は、埋めずに余白として残す。
+どうしても触れる必要があるときは、特定しない形にする。
+  「自宅のオフィスで」→ ×（場所が確かでないなら書かない）
+  「どこかの午後」「誰かの声」→ ○
+  「絶望していた」→ ×
+  「何かを考えていたのかもしれない」→ ○
+
+【表現は大胆にしてよい】
+
+次はむしろ積極的に使ってよい。
+  比喩 / 文章の構成 / リズム / 余韻 / 視点 / 本人が話した内容の再配置
+
+本人の言葉やニュアンスは、会話からそのまま拾ってよい。
+
+【形式】
+- 三人称で書く。「あなた」と呼びかけない
 - 200字から400字
-
-書いてよいこと:
-- 情景、時間帯、音、温度などの描写
-- 語りの間、視点の演出`;
+- 診断・性格づけをしない`;
 
 export interface FragmentResult {
   body: string | null;
@@ -160,7 +182,15 @@ export interface FragmentResult {
  */
 export async function generateFragment(
   messages: SourceTurn[],
-  oneLineMemory: string | null
+  oneLineMemory: string | null,
+  /**
+   * この回で確定した事実。ここに無いことは断定させない。
+   *
+   * ⚠ 今回のセッションぶんだけを渡す。
+   *   過去の全 facet を渡すと、別の時期の記憶の場所や人物が
+   *   今日のシーンに紛れ込む。今日のシーンは今日の記憶のもの。
+   */
+  facets: ValuedFacet[] = []
 ): Promise<FragmentResult> {
   const client = getOpenAI();
   if (!client) return { body: null, rejected: "no_client" };
@@ -168,12 +198,25 @@ export async function generateFragment(
   const source = [userText(messages), oneLineMemory ?? ""].join("\n").trim();
   if (!source) return { body: null, rejected: "no_source" };
 
+  const known = factLines(facets);
+  const unknown = unknownLines(facets);
+  const brief = [
+    "【本人が話したこと】",
+    source,
+    "",
+    "【確かなこと（断定してよいのはこれだけ）】",
+    known.length > 0 ? known.join("\n") : "（まだ何も確定していない）",
+    "",
+    "【まだ分かっていないこと（断定しないこと）】",
+    unknown.join("\n"),
+  ].join("\n");
+
   try {
     const res = await client.chat.completions.create({
       model: MODELS.extraction,
       messages: [
         { role: "system", content: FRAGMENT_SYSTEM },
-        { role: "user", content: source },
+        { role: "user", content: brief },
       ],
     });
     const body = res.choices[0]?.message?.content?.trim() ?? "";

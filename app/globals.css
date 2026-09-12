@@ -727,6 +727,11 @@ button.ghost.restart{margin-top:18px}
   margin:0 0 10px;
 }
 /* シーン。本人の記憶（.story-mem）とは別の面であることが見て分かるようにする */
+/* シーンの前に置く導入。なぜ脚本になっているのかを、注意書きではなく魅力として伝える */
+.story-lead{
+  color:var(--ink-soft);font-size:13px;line-height:2;
+  margin:0 0 14px;
+}
 .story-frag{
   background:rgba(255,255,255,.5);
   border-left:2px solid var(--line-strong);
