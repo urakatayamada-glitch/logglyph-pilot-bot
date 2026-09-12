@@ -394,3 +394,68 @@ export function transcript(messages: SourceTurn[]): string {
     .map((m) => `${m.role === "user" ? "相手" : "AI"}: ${m.content}`)
     .join("\n");
 }
+
+
+/* ============================================================
+   facet 名の正規化
+   ============================================================
+
+   ⚠ 本番で3回、進捗が 0% のままになった。原因はこれ。
+
+     モデルは正しく5件抽出していた。返ってきた名前がこうだった:
+
+       events.happened.何が起きたか
+       aftermath.changed.そのあと何が変わったか
+       aftermath.remains.いま残っているもの
+
+     category と slot の切れ目を取り違え、説明文まで名前に入れていた。
+     指示の一覧を「- events.happened : 何が起きたか」の形で書いていたためで、
+     こちらの書き方の問題である。
+
+     それを「知らない名前」として黙って捨てていたので、
+     拾えていないように見えていた。
+
+   ⚠ プロンプトの書き方を直すだけにしない。
+     モデルの出力が揺れても壊れないよう、受け取る側で直す。
+     （このプロジェクトの原則：機械的にチェックできる形にする）
+*/
+
+const ALL_SLOTS: Array<{ category: NarrativeCategory; slot: string }> =
+  NARRATIVE_CATEGORIES.flatMap((c) =>
+    CATEGORY_SLOTS[c].map((d) => ({ category: c, slot: d.slot }))
+  );
+
+/**
+ * モデルが返した category / slot を、こちらの定義に合わせ直す。
+ * どう分割されていても、既知の名前が含まれていれば拾う。解決できなければ null。
+ */
+export function normalizeFacetName(
+  category: unknown,
+  slot: unknown
+): { category: NarrativeCategory; slot: string } | null {
+  const raw = `${typeof category === "string" ? category : ""}.${
+    typeof slot === "string" ? slot : ""
+  }`;
+  // 区切りかもしれない文字で全部ばらす（. 、 : ： 空白 / ／ - _ は使わない：slot名に含まれるため）
+  const tokens = raw
+    .split(/[.\s:：、,／/|]+/)
+    .map((t) => t.trim())
+    .filter(Boolean);
+
+  const cat = NARRATIVE_CATEGORIES.find((c) => tokens.includes(c));
+
+  if (cat) {
+    const hit = CATEGORY_SLOTS[cat].find((d) => tokens.includes(d.slot));
+    if (hit) return { category: cat, slot: hit.slot };
+    return null;
+  }
+
+  /*
+   * カテゴリ名が無くても、スロット名だけで一意に決まるなら拾う。
+   * 15スロットの名前はすべて異なるので、取り違えは起きない。
+   */
+  const bySlot = ALL_SLOTS.filter((s) => tokens.includes(s.slot));
+  if (bySlot.length === 1) return { ...bySlot[0] };
+
+  return null;
+}

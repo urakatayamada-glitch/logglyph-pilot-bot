@@ -9,7 +9,7 @@ import {
   userText,
   checkFragment,
   factLines,
-  isNarrativeCategory,
+  normalizeFacetName,
   unknownLines,
 } from "./story";
 
@@ -86,7 +86,14 @@ function facetInstruction(): string {
   const lines: string[] = [];
   for (const c of NARRATIVE_CATEGORIES) {
     for (const d of CATEGORY_SLOTS[c]) {
-      lines.push(`- ${c}.${d.slot} : ${d.hint}`);
+      /*
+       * ⚠ 「events.happened : 何が起きたか」の形で書いていたら、
+       *   モデルが切れ目を取り違えて slot に説明文まで入れて返してきた。
+       *   どこが category で、どこが slot かを、書き方で明示する。
+       */
+      lines.push(
+        `  { "category": "${c}", "slot": "${d.slot}" }  … ${d.hint}`
+      );
     }
   }
   return lines.join("\n");
@@ -190,12 +197,20 @@ async function runFacetPass(
     const parsed = JSON.parse(raw) as { facets?: ExtractedFacet[] };
     const facets = Array.isArray(parsed.facets) ? parsed.facets : [];
 
-    // 知らないカテゴリ・スロットは捨てる。％の根拠を汚さない
-    const kept = facets.filter((f) => {
-      if (!isNarrativeCategory(f.category)) return false;
-      if (!CATEGORY_SLOTS[f.category].some((d) => d.slot === f.slot)) return false;
-      return typeof f.value === "string" && f.value.trim().length > 0;
-    });
+    /*
+     * 名前を正規化してから採る。
+     * ⚠ ここで素通しすると、モデルの返し方が少し違うだけで全部捨てる。
+     *   実際それで3回、進捗が 0% のままになった。
+     */
+    const kept: ExtractedFacet[] = [];
+    for (const f of facets) {
+      if (typeof f.value !== "string" || !f.value.trim()) continue;
+      const name = normalizeFacetName(f.category, f.slot);
+      if (!name) continue;
+      // 同じスロットが二重に来たら先に来たほうを採る
+      if (kept.some((k) => k.category === name.category && k.slot === name.slot)) continue;
+      kept.push({ category: name.category, slot: name.slot, value: f.value });
+    }
 
     /*
      * ⚠ 捨てた件数を必ず残す。

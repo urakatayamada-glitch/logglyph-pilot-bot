@@ -20,6 +20,7 @@ import {
   preferredPool,
   scoreFacets,
   unknownLines,
+  normalizeFacetName,
   transcript,
   userText,
 } from "../lib/story.ts";
@@ -260,4 +261,81 @@ test("userText：本人の発言だけ（こちらは文脈が落ちる）", () 
     !t.includes("どんなとき"),
     "本人の発言だけを抽出に渡すと、何の答えか分からなくなる"
   );
+});
+
+/* ---------- facet 名の正規化（本番で3回 0% になった原因） ---------- */
+
+test("normalizeFacetName：正しい形はそのまま通る", () => {
+  assert.deepEqual(normalizeFacetName("events", "happened"), {
+    category: "events",
+    slot: "happened",
+  });
+});
+
+test("normalizeFacetName：本番で実際に返ってきた壊れた形を直す", () => {
+  // 2026-09-12 のログで観測した実物
+  assert.deepEqual(normalizeFacetName("events", "happened.何が起きたか"), {
+    category: "events",
+    slot: "happened",
+  });
+  assert.deepEqual(
+    normalizeFacetName("aftermath", "changed.そのあと何が変わったか"),
+    { category: "aftermath", slot: "changed" }
+  );
+  assert.deepEqual(
+    normalizeFacetName("aftermath", "meaning_now.いまどう思っているか"),
+    { category: "aftermath", slot: "meaning_now" }
+  );
+});
+
+test("normalizeFacetName：category 側に混ざっていても直す", () => {
+  assert.deepEqual(normalizeFacetName("aftermath.remains", "いま残っているもの"), {
+    category: "aftermath",
+    slot: "remains",
+  });
+});
+
+test("normalizeFacetName：カテゴリが無くてもスロット名だけで決まる", () => {
+  // 15のスロット名はすべて異なるので一意に決まる
+  assert.deepEqual(normalizeFacetName("", "not_chose"), {
+    category: "events",
+    slot: "not_chose",
+  });
+});
+
+test("normalizeFacetName：本当に知らない名前は通さない", () => {
+  assert.equal(normalizeFacetName("mood", "whatever"), null);
+  assert.equal(normalizeFacetName("events", "unknown_slot"), null);
+  assert.equal(normalizeFacetName(null, undefined), null);
+});
+
+test("normalizeFacetName：meaning_now のアンダースコアを壊さない", () => {
+  // 区切り文字に _ を入れてしまうと meaning_now が割れる
+  assert.deepEqual(normalizeFacetName("aftermath", "meaning_now"), {
+    category: "aftermath",
+    slot: "meaning_now",
+  });
+  assert.deepEqual(normalizeFacetName("characters", "who"), {
+    category: "characters",
+    slot: "who",
+  });
+});
+
+test("正規化した5件が、実際に進捗を動かす", () => {
+  // ログで観測した5件のうち、カテゴリが分かるもの
+  const raw = [
+    { category: "events", slot: "happened.何が起きたか" },
+    { category: "aftermath", slot: "changed.そのあと何が変わったか" },
+    { category: "aftermath", slot: "remains.いま残っているもの" },
+    { category: "aftermath", slot: "meaning_now.いまどう思っているか" },
+  ];
+  const fixed = raw
+    .map((f) => normalizeFacetName(f.category, f.slot))
+    .filter((f): f is { category: "events"; slot: string } => f !== null);
+  assert.equal(fixed.length, 4);
+
+  const { scores, overall } = scoreFacets(fixed);
+  assert.equal(scores.aftermath, 100, "その後が満点になる");
+  assert.equal(scores.events, 33);
+  assert.ok(overall > 0, "0% のままにならない");
 });
