@@ -42,15 +42,45 @@ export function userText(messages: SourceTurn[]): string {
    1. memory_facets（FACT）
    ============================================================ */
 
-const FACET_SYSTEM = `あなたは、ある人が話した内容から「事実として書かれていること」だけを拾い出す。
+/*
+ * ⚠ 一度、これが厳しすぎて0件しか取れなかった（2026-09-12 本番）。
+ *
+ *   会話には「ホテルの人によくしてもらった」「発注をもらった」
+ *   「自信になった」「今もスーツを捨てられない」が出ていたのに、
+ *   抽出は1件も返さなかった。「推測で埋めない」を繰り返した結果、
+ *   本人がはっきり言ったことまで拾わなくなっていた。
+ *
+ *   拾わなすぎると進捗が動かず、「まだ見えていないもの」も変わらない。
+ *   話しても何も起きないので、体験そのものが成立しない。
+ *
+ *   禁止したいのは「本人が言っていないことの追加」であって、
+ *   「本人が言ったことの言い換え」ではない。
+ */
+const FACET_SYSTEM = `あなたは、ある人が話した内容から、物語の素材になる事実を拾い出す。
 
-守ること:
-- 本人が言っていないことは拾わない。推測で埋めない
-- 内面の断定をしない。「〜と思っていた」は本人がそう言った場合のみ
-- 分からない項目は返さない。無理に埋めない
-- それぞれ40字以内の短い記述にする
+拾ってよいもの:
+- 本人が実際に口にしたこと。言い換えてよい。逐語でなくてよい
+- 本人が「〜だった」「〜と思った」と言ったことは、そのまま拾ってよい
 
-拾う項目は次のとおり。該当するものだけを返す。`;
+拾ってはいけないもの:
+- 本人が話していないことの追加。推測で埋めない
+- 本人が言っていない内面の断定
+
+ほかの決まり:
+- それぞれ40字以内
+- 該当する項目だけ返す。無理に全部埋めない
+- category と slot は、下の一覧にある文字列をそのまま使う。
+  一覧にない名前を作らない
+
+例:
+  「営業先の人がよくしてくれて、発注ももらった」
+    → characters.relation  営業先の人がよくしてくれた
+    → events.happened      発注をもらった
+  「あれは自信になった。今もスーツを捨てられない」
+    → aftermath.changed    自信になった
+    → aftermath.remains    今もスーツを捨てられずにいる
+
+拾う項目の一覧:`;
 
 function facetInstruction(): string {
   const lines: string[] = [];
@@ -97,6 +127,25 @@ export async function extractFacets(
   messages: SourceTurn[],
   oneLineMemory: string | null
 ): Promise<ExtractedFacet[]> {
+  const first = await runFacetPass(messages, oneLineMemory, false);
+  if (first.length > 0) return first;
+
+  /*
+   * 0件だったときだけ、もう一度だけ拾い直す。
+   *
+   * ⚠ 会話に材料があるのに0件だと、進捗も不足表示も動かず体験が死ぬ。
+   *   0件は「本当に何も無い」より「拾い損ねた」ほうが多い。
+   * ⚠ 追加の呼び出しは失敗したときだけ。通常は1回のまま。
+   */
+  console.warn("facet retry", { reason: "first pass returned 0" });
+  return runFacetPass(messages, oneLineMemory, true);
+}
+
+async function runFacetPass(
+  messages: SourceTurn[],
+  oneLineMemory: string | null,
+  permissive: boolean
+): Promise<ExtractedFacet[]> {
   const client = getOpenAI();
   if (!client) return [];
 
@@ -107,7 +156,17 @@ export async function extractFacets(
     const res = await client.chat.completions.create({
       model: MODELS.extraction,
       messages: [
-        { role: "system", content: `${FACET_SYSTEM}\n\n${facetInstruction()}` },
+        {
+          role: "system",
+          content: [
+            FACET_SYSTEM,
+            "",
+            facetInstruction(),
+            permissive
+              ? "\n一度目は1件も拾えなかった。本人がはっきり口にしたことは、言い換えて構わないので必ず拾うこと。"
+              : "",
+          ].join("\n"),
+        },
         { role: "user", content: source },
       ],
       response_format: {
@@ -121,11 +180,31 @@ export async function extractFacets(
     const facets = Array.isArray(parsed.facets) ? parsed.facets : [];
 
     // 知らないカテゴリ・スロットは捨てる。％の根拠を汚さない
-    return facets.filter((f) => {
+    const kept = facets.filter((f) => {
       if (!isNarrativeCategory(f.category)) return false;
       if (!CATEGORY_SLOTS[f.category].some((d) => d.slot === f.slot)) return false;
       return typeof f.value === "string" && f.value.trim().length > 0;
     });
+
+    /*
+     * ⚠ 捨てた件数を必ず残す。
+     *   ここが黙って捨てていたため「0件なのは抽出が弱いから」なのか
+     *   「名前が合わずに落ちているから」なのかが分からなかった。
+     *   ⚠ value はログに出さない（本人の記憶そのものなので）。
+     */
+    if (kept.length < facets.length) {
+      console.warn("facets dropped", {
+        returned: facets.length,
+        kept: kept.length,
+        names: facets
+          .filter((f) => !kept.includes(f))
+          .map((f) => `${f.category}.${f.slot}`),
+      });
+    }
+    if (kept.length === 0) {
+      console.warn("facets empty", { returned: facets.length });
+    }
+    return kept;
   } catch (error) {
     console.error("facet extraction failed", error);
     return [];
