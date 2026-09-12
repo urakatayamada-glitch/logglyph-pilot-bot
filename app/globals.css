@@ -697,6 +697,107 @@ button.ghost.restart{margin-top:18px}
   color:var(--ink-soft);font-size:12.5px;line-height:2;margin:0;
 }
 
+/* ---------- Story Preview（story_preview_v1） ---------- */
+/*
+ * baseline / memory_receipt_v1 と同じ位置・同じ余白に置く。
+ * 差が「どこに出たか」ではなく「何が出たか」だけになるようにする。
+ *
+ * ⚠ 本文は 16px より小さくしないこと。読み手は自分の記憶を読み返している。
+ *   見た目の都合で 14.5px に戻さないこと。
+ */
+.story{
+  margin-top:26px;
+  padding-top:22px;
+  border-top:1px solid var(--line);
+}
+.story-h{
+  font-size:15px;font-weight:700;color:var(--ink);
+  line-height:1.8;margin:0 0 14px;
+}
+.story-mem{
+  background:var(--glass);
+  border:1px solid var(--line);
+  border-radius:13px;
+  padding:14px 16px;
+  font-size:16px;line-height:1.9;color:var(--ink);
+  margin:0 0 22px;
+}
+.story-sub{
+  font-size:11px;letter-spacing:.16em;color:var(--ink-soft);
+  margin:0 0 10px;
+}
+/* シーン。本人の記憶（.story-mem）とは別の面であることが見て分かるようにする */
+.story-frag{
+  background:rgba(255,255,255,.5);
+  border-left:2px solid var(--line-strong);
+  border-radius:0 13px 13px 0;
+  padding:14px 16px;
+  margin:0 0 8px;
+}
+.story-frag p{
+  font-size:16px;line-height:2;color:var(--ink);
+  margin:0 0 10px;
+}
+.story-frag p:last-child{margin-bottom:0}
+/*
+ * ⚠ --ink-faint にしないこと。淡い背景で読めなくなる。
+ *   演出と事実の区別を伝える一文なので、読めないと意味がない。
+ */
+.story-caveat{
+  color:var(--ink-soft);font-size:11.5px;line-height:1.9;
+  margin:0 0 24px;
+}
+.story-overall{
+  font-size:14px;color:var(--ink-soft);margin:0 0 16px;
+}
+.story-overall b{font-size:26px;font-weight:700;color:var(--ink);margin:0 3px}
+.story-from{color:var(--ink-faint);font-size:12px;margin-right:6px}
+
+.story-bars{list-style:none;margin:0 0 24px;padding:0;display:flex;flex-direction:column;gap:11px}
+.story-bars li{display:flex;align-items:center;gap:10px}
+/* ⚠ 「あの頃の自分」「出来事・選択」は6文字。折り返すとバーが2行ぶん潰れる */
+.story-cat{
+  font-size:12.5px;color:var(--ink-soft);
+  flex:0 0 6.6em;
+  white-space:nowrap;
+}
+.story-bar{
+  flex:1;height:6px;border-radius:3px;
+  background:rgba(255,255,255,.55);
+  overflow:hidden;
+}
+.story-bar-fill{
+  display:block;height:100%;border-radius:3px;
+  background:linear-gradient(90deg,rgba(150,196,224,.9),rgba(186,214,232,.9));
+}
+/*
+ * 幅を固定する。差分「65% →」が付く行だけ値の欄が広がると
+ * バーの右端が揃わず、カテゴリ間の比較ができなくなる。
+ */
+.story-val{
+  font-size:12px;color:var(--ink);
+  flex:0 0 7.2em;text-align:right;
+  font-variant-numeric:tabular-nums;
+}
+
+.story-missing{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:9px}
+.story-missing li{
+  color:var(--ink-soft);font-size:13.5px;line-height:1.85;
+  padding-left:14px;position:relative;
+}
+.story-missing li::before{
+  content:"";position:absolute;left:0;top:.75em;
+  width:5px;height:5px;border-radius:50%;
+  background:var(--ink-faint);
+}
+
+@media (max-width:420px){
+  .story-cat{flex-basis:6.6em;font-size:11.5px}
+  .story-val{flex-basis:6.2em;font-size:11px}
+  .story-bars li{gap:6px}
+  .story-from{font-size:11px;margin-right:4px}
+}
+
 /* ---------- Wave 1 追加評価 ---------- */
 .w1{margin-top:24px;padding-top:20px;border-top:1px solid var(--line)}
 .w1-h{font-size:11px;letter-spacing:.16em;color:var(--ink-faint);margin:0 0 4px}

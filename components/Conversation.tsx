@@ -11,6 +11,7 @@ import type { ChatMessage } from "../lib/conversation/phase";
 import type { MemoryTriggerEpisode } from "../lib/episodes";
 import { RECENT_EPISODE_MEMORY } from "../lib/conversation/config";
 import { DEFAULT_VARIANT, ExperienceVariant, isExperienceVariant } from "../lib/experience";
+import { StoryData } from "./StoryPreview";
 
 const LS_SESSION = "logglyph.session";
 const LS_ACCEPTED = "logglyph.accepted";
@@ -144,6 +145,20 @@ function readLS<T>(key: string): T | null {
  * 「前にも同じ話を聞かれた」が起きる原因になっていた。
  * Cookieならサーバー側で読めるので、初回表示から除外できる。
  */
+/**
+ * いま不足している物語カテゴリを Cookie に残す。
+ * 次回、サーバーコンポーネントが Episode を選ぶときに読む。
+ * ⚠ 入れるのはカテゴリ名だけ。トークンは入れない。
+ */
+function writeNeedCookie(categories: string[]) {
+  try {
+    const v = categories.slice(0, 3).join(",");
+    document.cookie = `lg_need=${encodeURIComponent(v)}; path=/; max-age=${60 * 60 * 24 * 60}; samesite=lax`;
+  } catch {
+    /* 失敗しても体験は壊さない */
+  }
+}
+
 function writeRecentCookie(ids: string[]) {
   try {
     const v = ids.slice(0, RECENT_EPISODE_MEMORY).join(",");
@@ -204,6 +219,10 @@ export default function Conversation({
    */
   const [experienceVariant, setExperienceVariant] =
     useState<ExperienceVariant>(DEFAULT_VARIANT);
+  /** story_preview_v1 のとき、会話終了時にサーバーが返す */
+  const [story, setStory] = useState<StoryData | null>(null);
+  /** 前回までの総合％。差分「46% → 52%」を出すため */
+  const [previousOverall, setPreviousOverall] = useState<number | null>(null);
 
   /** 初期化：前回の会話があれば復元、なければEpisodeで開始 */
   useEffect(() => {
@@ -332,6 +351,23 @@ export default function Conversation({
         // 取得できなければ null のまま。件数を出さずに続行する。
         if (typeof data?.memoryCount === "number") setMemoryCount(data.memoryCount);
         if (Array.isArray(data?.recentMemories)) setRecentMemories(data.recentMemories);
+        if (data?.story) {
+          const s = data.story as StoryData & {
+            need?: string[];
+            previousOverall?: number;
+          };
+          setStory(s);
+          setPreviousOverall(
+            typeof s.previousOverall === "number" ? s.previousOverall : null
+          );
+          /*
+           * 次回に出す Episode を、いま不足しているカテゴリ寄りにする。
+           *
+           * ⚠ Cookie に入れるのはカテゴリ名だけ。client_token は入れない。
+           *   個人を特定できる値をサーバーへ毎回送る形にしない。
+           */
+          writeNeedCookie(Array.isArray(s.need) ? s.need : []);
+        }
       } catch {
         /* 抽出に失敗しても終了体験は壊さない */
       }
@@ -489,6 +525,8 @@ export default function Conversation({
             experienceVariant={experienceVariant}
             sessionId={sessionId}
             clientToken={readLS<string>(LS_CLIENT)}
+            story={story}
+            previousOverall={previousOverall}
             restartSlot={
               crisis ? null : (
                 <button className="ghost restart" onClick={restart}>

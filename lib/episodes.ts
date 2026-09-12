@@ -1,10 +1,18 @@
 import { getSupabaseAdmin } from "./supabase-server";
+/*
+ * 抽選の優先度だけを決める純関数は lib/story.ts に置いている。
+ * このファイルは DB を読むため node:test から直接 import できない。
+ * 判定ロジックを検証可能な側へ寄せておく。
+ */
+import { preferredPool } from "./story";
 
 export interface MemoryTriggerEpisode {
   id: string;
   body: string;
   category: string;
   source_type: "seed" | "ai_generated" | "user_memory";
+  /** 物語のどの部分を引き出しやすいか。未設定の Episode は null */
+  narrative_categories?: string[] | null;
 }
 
 /**
@@ -34,14 +42,26 @@ const FALLBACK_EPISODE: MemoryTriggerEpisode = {
  */
 export async function pickEpisode(
   excludeIds: string[] = [],
-  sourceType: "seed" | "ai_generated" = "seed"
+  sourceType: "seed" | "ai_generated" = "seed",
+  /**
+   * いま不足している物語カテゴリ。
+   *
+   * Story Preview で「登場人物がまだ見えていない」と伝えておきながら、
+   * 次回に全く関係のない Episode が出ると体験が切れる。
+   * それを避けるための優先抽選。
+   *
+   * ⚠ 会話のしかた（Conversation Engine）は一切変えていない。
+   *   変わるのは「どの話題から入るか」の抽選の重みだけ。
+   * ⚠ 絞り込みではなく優先。該当が無ければ従来どおり全体から選ぶ。
+   */
+  preferCategories: string[] = []
 ): Promise<MemoryTriggerEpisode> {
   const supabase = getSupabaseAdmin();
   if (!supabase) return FALLBACK_EPISODE;
 
   const { data, error } = await supabase
     .from("memory_trigger_episodes")
-    .select("id, body, category, source_type")
+    .select("id, body, category, source_type, narrative_categories")
     .eq("is_active", true)
     .eq("source_type", sourceType);
 
@@ -50,7 +70,9 @@ export async function pickEpisode(
   const episodes = data as MemoryTriggerEpisode[];
   const excluded = new Set(excludeIds);
   const fresh = episodes.filter((e) => !excluded.has(e.id));
-  const pool = fresh.length > 0 ? fresh : episodes;
+  const base = fresh.length > 0 ? fresh : episodes;
 
+  const pool = preferredPool(base, preferCategories);
   return pool[Math.floor(Math.random() * pool.length)];
 }
+

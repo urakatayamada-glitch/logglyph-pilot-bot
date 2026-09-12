@@ -232,7 +232,15 @@ export default async function AdminHome({
        「最初の entry_view の時刻」以降のセッションだけを対象にする。
        prompt_version では絞らない（Stage 1 の有無が別の時代を作るため）。
   */
-  const [entryRes, rejectRes, foundViewRes, noteRes, internalRes, receiptRes] =
+  const [
+    entryRes,
+    rejectRes,
+    foundViewRes,
+    noteRes,
+    internalRes,
+    receiptRes,
+    storyViewRes,
+  ] =
     await Promise.all([
     supabase
       .from("entry_views")
@@ -250,6 +258,7 @@ export default async function AdminHome({
       .select("session_id, approved, campaign_key, first_sent_at"),
     supabase.from("internal_clients").select("client_token"),
     supabase.from("receipt_views").select("session_id"),
+    supabase.from("story_views").select("session_id"),
   ]);
 
   const entryRows = (entryRes.data ?? []) as Array<{
@@ -279,6 +288,9 @@ export default async function AdminHome({
     .map((r) => r.client_token);
   const receiptSessionIds = (
     (receiptRes.data ?? []) as Array<{ session_id: string }>
+  ).map((r) => r.session_id);
+  const storySessionIds = (
+    (storyViewRes.data ?? []) as Array<{ session_id: string }>
   ).map((r) => r.session_id);
 
   const stage1Since = entryRows.length > 0 ? entryRows[0].viewed_at : null;
@@ -425,6 +437,7 @@ export default async function AdminHome({
       experience_variant: r.experience_variant,
     })),
     receiptSessionIds,
+    storySessionIds,
     internalTokens,
     includeInternal,
   });
@@ -853,6 +866,10 @@ export default async function AdminHome({
                 [
                   "Memory Receipt Viewed",
                   (f: typeof variants[string]) => f?.receiptViewed,
+                ],
+                [
+                  "Story Fragment Viewed",
+                  (f: typeof variants[string]) => f?.storyViewed,
                 ],
                 [
                   "Same-Day Continuation",

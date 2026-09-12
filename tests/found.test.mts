@@ -796,21 +796,32 @@ test("foundCampaignFunnel : 今回の想定（6名送付・まだ誰も見てい
    体験条件（experience_variant）
    ============================================================ */
 
-test("resolveExperienceVariant : フラグが 1 のときだけ v1", () => {
-  assert.equal(resolveExperienceVariant("1"), "memory_receipt_v1");
-  assert.equal(resolveExperienceVariant("0"), "baseline");
-  assert.equal(resolveExperienceVariant(""), "baseline");
+test("resolveExperienceVariant : 条件名の直接指定が効く", () => {
+  assert.equal(resolveExperienceVariant("memory_receipt_v1"), "memory_receipt_v1");
+  assert.equal(resolveExperienceVariant("story_preview_v1"), "story_preview_v1");
   assert.equal(resolveExperienceVariant(undefined), "baseline");
-  // "true" では有効にしない。値は "1" だけと決めている
-  assert.equal(resolveExperienceVariant("true"), "baseline");
+  // 知らない値は通さない。誤記で勝手な条件ができないようにする
+  assert.equal(resolveExperienceVariant("story_v2"), "baseline");
+});
+
+test("resolveExperienceVariant : 旧 MEMORY_RECEIPT_ENABLED との後方互換", () => {
+  // 既存の Vercel 設定を壊さない
+  assert.equal(resolveExperienceVariant(undefined, "1"), "memory_receipt_v1");
+  assert.equal(resolveExperienceVariant(undefined, "0"), "baseline");
+  // 新しい指定があればそちらが勝つ
+  assert.equal(
+    resolveExperienceVariant("story_preview_v1", "1"),
+    "story_preview_v1"
+  );
 });
 
 test("isExperienceVariant : 知らない値は通さない", () => {
   assert.equal(isExperienceVariant("baseline"), true);
   assert.equal(isExperienceVariant("memory_receipt_v1"), true);
+  assert.equal(isExperienceVariant("story_preview_v1"), true);
   assert.equal(isExperienceVariant("memory_receipt_v2"), false);
   assert.equal(isExperienceVariant(null), false);
-  assert.equal(EXPERIENCE_VARIANTS.length, 2);
+  assert.equal(EXPERIENCE_VARIANTS.length, 3);
 });
 
 function vs(

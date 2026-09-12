@@ -619,6 +619,7 @@ export interface VariantFunnel {
   completed: number;
   memoryFound: number;
   receiptViewed: number;
+  storyViewed: number;
   sameDayContinuation: number;
   nextDayReturn: number;
   newMemoryFound: number;
@@ -630,6 +631,7 @@ function emptyVariantFunnel(): VariantFunnel {
     completed: 0,
     memoryFound: 0,
     receiptViewed: 0,
+    storyViewed: 0,
     sameDayContinuation: 0,
     nextDayReturn: 0,
     newMemoryFound: 0,
@@ -646,10 +648,12 @@ function emptyVariantFunnel(): VariantFunnel {
 export function variantFunnels(args: {
   sessions: VariantSessionRow[];
   receiptSessionIds: Iterable<string>;
+  storySessionIds?: Iterable<string>;
   internalTokens: Iterable<string>;
   includeInternal: boolean;
 }): Record<string, VariantFunnel> {
   const receipts = new Set(args.receiptSessionIds);
+  const stories = new Set(args.storySessionIds ?? []);
   const internal = new Set(args.internalTokens);
 
   const byToken = new Map<string, VariantSessionRow[]>();
@@ -675,6 +679,7 @@ export function variantFunnels(args: {
     f.people += 1;
     if (ordered.some((s) => s.completed_at)) f.completed += 1;
     if (ordered.some((s) => receipts.has(s.session_id))) f.receiptViewed += 1;
+    if (ordered.some((s) => stories.has(s.session_id))) f.storyViewed += 1;
 
     const firstMemory = ordered.find((s) => s.memory_found);
     if (!firstMemory) continue;

@@ -59,6 +59,7 @@ export async function POST(req: Request) {
      *   変えてしまうと「同じ会話なのに前半と後半で条件が違う」行ができる。
      */
     let experienceVariant = resolveExperienceVariant(
+      process.env.EXPERIENCE_VARIANT,
       process.env.MEMORY_RECEIPT_ENABLED
     );
     if (supabaseForCheck) {

@@ -10,7 +10,11 @@
  *   会話そのものは baseline と memory_receipt_v1 で完全に同一である。
  */
 
-export const EXPERIENCE_VARIANTS = ["baseline", "memory_receipt_v1"] as const;
+export const EXPERIENCE_VARIANTS = [
+  "baseline",
+  "memory_receipt_v1",
+  "story_preview_v1",
+] as const;
 export type ExperienceVariant = (typeof EXPERIENCE_VARIANTS)[number];
 
 export const DEFAULT_VARIANT: ExperienceVariant = "baseline";
@@ -27,14 +31,20 @@ export function isExperienceVariant(v: unknown): v is ExperienceVariant {
  * ⚠ 既存セッションの再開には使わない。再開では保存済みの値を読む。
  *   途中でフラグを切り替えたときに、同じ会話の条件が変わってしまうため。
  */
-export function resolveExperienceVariant(env: string | undefined): ExperienceVariant {
-  return env === "1" ? "memory_receipt_v1" : "baseline";
+export function resolveExperienceVariant(
+  env: string | undefined,
+  legacyMemoryReceipt?: string | undefined
+): ExperienceVariant {
+  // 新しい指定が優先。EXPERIENCE_VARIANT に条件名をそのまま入れる
+  if (isExperienceVariant(env)) return env;
+  // 旧フラグ。既存の Vercel 設定を壊さないための後方互換
+  if (legacyMemoryReceipt === "1") return "memory_receipt_v1";
+  return "baseline";
 }
-
-export const MEMORY_RECEIPT_ENABLED = process.env.MEMORY_RECEIPT_ENABLED === "1";
 
 /** 表示用。Admin の見出しに使う。 */
 export const VARIANT_LABELS: Record<ExperienceVariant, string> = {
   baseline: "baseline（Future Preview）",
   memory_receipt_v1: "memory_receipt_v1（Memory Receipt）",
+  story_preview_v1: "story_preview_v1（Story Preview）",
 };

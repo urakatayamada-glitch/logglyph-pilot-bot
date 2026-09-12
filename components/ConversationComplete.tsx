@@ -3,6 +3,7 @@
 import { ReactNode, useState } from "react";
 import FuturePreview from "./FuturePreview";
 import MemoryReceipt from "./MemoryReceipt";
+import StoryPreview, { StoryData } from "./StoryPreview";
 import { ExperienceVariant } from "../lib/experience";
 import Wave1Survey, { Wave1Answers } from "./Wave1Survey";
 
@@ -34,6 +35,8 @@ export default function ConversationComplete({
   experienceVariant,
   sessionId,
   clientToken,
+  story,
+  previousOverall,
   restartSlot,
 }: {
   oneLineMemory: string | null;
@@ -48,9 +51,12 @@ export default function ConversationComplete({
    *   memory_receipt_v1 … Memory Receipt（今日ひとつ残りました／確定）
    */
   experienceVariant: ExperienceVariant;
-  /** Memory Receipt の表示記録に使う。baseline では使わない。 */
+  /** Memory Receipt / Story Preview の表示記録に使う。baseline では使わない。 */
   sessionId: string | null;
   clientToken: string | null;
+  /** story_preview_v1 のときだけ入る。生成に失敗したら null */
+  story: StoryData | null;
+  previousOverall: number | null;
   /**
    * 「別の話をする」。最後の段階に来るまで出さない。
    * 評価の段階で出すと、Future Preview と追加設問を飛ばして
@@ -62,6 +68,12 @@ export default function ConversationComplete({
   const [again, setAgain] = useState<boolean | null>(null);
   const [stage, setStage] = useState<Stage>("rating");
   const isReceipt = experienceVariant === "memory_receipt_v1";
+  /*
+   * Story は生成に失敗することがある（検証で落ちた場合も含む）。
+   * そのときは Memory Receipt の見た目に落とす。何も出ないよりよい。
+   */
+  const isStory = experienceVariant === "story_preview_v1" && story != null;
+  const hideLogCard = (isReceipt || isStory) && stage !== "rating";
 
   // 危機対応で終了した会話では、評価もログ表示も出さない
   if (crisis) return null;
@@ -82,7 +94,7 @@ export default function ConversationComplete({
         ⚠ 評価の段階では baseline と同じように出す。ここを変えると
           「話しやすかった / また話したい」の条件が baseline と揃わなくなる。
       */}
-      {oneLineMemory && !(isReceipt && stage !== "rating") && (
+      {oneLineMemory && !hideLogCard && (
         <div className="memory-card">
           <div className="memory-label">今日のログ</div>
           <div className="memory-body">{oneLineMemory}</div>
@@ -138,7 +150,15 @@ export default function ConversationComplete({
               評価より前に出すと「また話したい」が Wave 0 の 59% と
               比較できなくなる（Future Preview をここに置いた元の理由と同じ）。
           */}
-          {isReceipt ? (
+          {isStory ? (
+            <StoryPreview
+              oneLineMemory={oneLineMemory}
+              story={story}
+              previousOverall={previousOverall}
+              sessionId={sessionId}
+              clientToken={clientToken}
+            />
+          ) : isReceipt || experienceVariant === "story_preview_v1" ? (
             <MemoryReceipt
               oneLineMemory={oneLineMemory}
               memoryCount={memoryCount}

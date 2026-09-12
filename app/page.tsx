@@ -25,7 +25,19 @@ export default async function Home() {
     .map((s) => s.trim())
     .filter(Boolean);
 
-  const episode = await pickEpisode(recent);
+  /*
+   * いま不足している物語カテゴリ。
+   *
+   * ⚠ client_token は Cookie に入れない。localStorage のまま。
+   *   ここに入れるのは「不足カテゴリ名」だけで、個人は特定できない。
+   *   会話終了時にサーバーが返した値を、クライアントが Cookie へ書いている。
+   */
+  const need = (store.get("lg_need")?.value ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  const episode = await pickEpisode(recent, "seed", need);
 
   return (
     <main className="shell">
