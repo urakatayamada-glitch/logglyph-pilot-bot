@@ -6,6 +6,7 @@ import {
   SourceTurn,
   ValuedFacet,
   transcript,
+  userText,
   checkFragment,
   factLines,
   isNarrativeCategory,
@@ -57,6 +58,9 @@ const FACET_SYSTEM = `あなたは、ある人が話した内容から、物語�
 - AIの質問は文脈を理解するためだけに使う。AIの発言そのものは拾わない
   （「そのスーツはどんなときに着てたの？」→「営業だったから」で
     events.happened に「営業で着ていた」と拾ってよい）
+
+⚠ 最初のAIの発言は、話のきっかけとして出した「別の人の話」である。
+  そこに出てくる場所・人物・出来事は、本人のものではない。絶対に拾わない。
 
 拾ってはいけないもの:
 - 本人が話していないことの追加。推測で埋めない
@@ -308,7 +312,16 @@ export async function generateFragment(
       ],
     });
     const body = res.choices[0]?.message?.content?.trim() ?? "";
-    const check = checkFragment(body, source);
+    /*
+     * ⚠ 数字の照合に会話全体を使わないこと。
+     *   会話には最初のEpisode（別の人の話）が含まれるので、
+     *   そこに出てきた数字をシーンが使えてしまう。
+     *   照合してよいのは本人の発言と、確定した事実だけ。
+     */
+    const factual = [userText(messages), oneLineMemory ?? "", ...facets.map((f) => f.value)]
+      .join("\n")
+      .trim();
+    const check = checkFragment(body, factual);
     if (!check.ok) {
       console.warn("fragment rejected", { reason: check.reason, detail: check.detail });
       return { body: null, rejected: check.reason };
