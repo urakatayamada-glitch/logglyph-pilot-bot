@@ -14,10 +14,8 @@ import {
   axisKeys,
   axisLabel,
   axisOrder,
-  emptyAnswers,
-  hasAnyAnswer,
   profileGroup,
-  sanitizeAnswers,
+  toDbPatch,
 } from "../lib/profile.ts";
 // ⚠ 型は import type で取ること。値として import すると
 //   strip-types のローダーが実体を探して落ちる。
@@ -32,39 +30,52 @@ import {
    受け取った値の検証
    ============================================================ */
 
-test("sanitizeAnswers : 知らない値は捨て、捨てた件数を返す", () => {
-  const { answers, dropped } = sanitizeAnswers({
+test("toDbPatch : 知らない値は捨て、捨てた件数を返す", () => {
+  const { patch, dropped, hasAny } = toDbPatch({
     ageBand: "80s",
     gender: "male",
-    states: ["career", "not_a_state", "milestone"],
+    states: ["career_change", "not_a_state", "milestone"],
     motives: ["nope"],
     reflectHabit: "sometimes",
   });
-  assert.equal(answers.ageBand, null);
-  assert.equal(answers.gender, "male");
-  assert.deepEqual(answers.states, ["career", "milestone"]);
-  assert.deepEqual(answers.motives, []);
-  assert.equal(answers.reflectHabit, "sometimes");
+  assert.equal(patch.age_band, null);
+  assert.equal(patch.gender, "male");
+  assert.deepEqual(patch.states, ["career_change", "milestone"]);
+  assert.deepEqual(patch.motives, []);
+  assert.equal(patch.reflect_habit, "sometimes");
+  assert.equal(hasAny, true);
   // ⚠ 黙って捨てない。捨てた事実が数えられること
   assert.equal(dropped, 3);
 });
 
-test("sanitizeAnswers : 同じ選択肢を重ねて送られても1回だけ数える", () => {
-  const { answers } = sanitizeAnswers({ states: ["career", "career", "career"] });
-  assert.deepEqual(answers.states, ["career"]);
+test("toDbPatch : 渡さなかった設問の列は触らない（3ステップの要）", () => {
+  // STEP 2 の送信。states を含めていないので、STEP 1 の回答が消えてはいけない
+  const { patch } = toDbPatch({ motives: ["no_reason"] });
+  assert.deepEqual(Object.keys(patch), ["motives"]);
+  assert.equal("states" in patch, false);
 });
 
-test("sanitizeAnswers : 空・不正な形でも落ちない", () => {
-  for (const input of [null, undefined, 0, "x", [], { states: "career" }]) {
-    const { answers } = sanitizeAnswers(input);
-    assert.equal(hasAnyAnswer(answers), false);
+test("toDbPatch : 何も選ばずに次へ進んでも、その列は空で記録される", () => {
+  const { patch, hasAny } = toDbPatch({ states: [] });
+  assert.deepEqual(patch.states, []);
+  assert.equal(hasAny, false);
+});
+
+test("toDbPatch : 整理前の旧コードは新規回答として受け付けない", () => {
+  const { patch } = toDbPatch({ states: ["career", "transition", "milestone"] });
+  assert.deepEqual(patch.states, ["milestone"]);
+});
+
+test("toDbPatch : 同じ選択肢を重ねて送られても1回だけ数える", () => {
+  const { patch } = toDbPatch({ states: ["milestone", "milestone", "milestone"] });
+  assert.deepEqual(patch.states, ["milestone"]);
+});
+
+test("toDbPatch : 空・不正な形でも落ちない", () => {
+  for (const input of [null, undefined, 0, "x", [], { states: "career_change" }]) {
+    const { hasAny } = toDbPatch(input);
+    assert.equal(hasAny, false);
   }
-});
-
-test("hasAnyAnswer : 1つでも答えていれば true", () => {
-  assert.equal(hasAnyAnswer(emptyAnswers()), false);
-  assert.equal(hasAnyAnswer({ ...emptyAnswers(), states: ["career"] }), true);
-  assert.equal(hasAnyAnswer({ ...emptyAnswers(), gender: "no_answer" }), true);
 });
 
 test("全選択肢に日本語ラベルがある（コードがそのまま画面に出ない）", () => {
@@ -75,7 +86,7 @@ test("全選択肢に日本語ラベルがある（コードがそのまま画�
 });
 
 test("表示順は選択肢の定義順（回答数順にすると毎回並びが変わる）", () => {
-  assert.deepEqual([...axisOrder("state")], [...STATES]);
+  assert.deepEqual([...axisOrder("state")].slice(0, STATES.length), [...STATES]);
   assert.deepEqual([...axisOrder("motive")], [...MOTIVES]);
 });
 
@@ -104,8 +115,8 @@ test("axisKeys : 未回答の軸は空を返す（どの行にも入らない）
   assert.deepEqual(axisKeys("state", row()), []);
   assert.deepEqual(axisKeys("state", undefined), []);
   assert.deepEqual(
-    axisKeys("state", row({ states: ["career", "bogus", "milestone"] })),
-    ["career", "milestone"]
+    axisKeys("state", row({ states: ["career_change", "bogus", "milestone"] })),
+    ["career_change", "milestone"]
   );
 });
 
@@ -194,13 +205,13 @@ test("cohortFunnels : 複数選択では1人が複数行に入り、合計は人
     ...base,
   });
   const profiles = new Map<string, ProfileRow>([
-    ["a", row({ client_token: "a", answered: true, states: ["career", "milestone"] })],
+    ["a", row({ client_token: "a", answered: true, states: ["career_change", "milestone"] })],
   ]);
   const f = cohortFunnels(people, (p) => axisKeys("state", profiles.get(p.clientToken)));
-  assert.equal(f.career.people, 1);
+  assert.equal(f.career_change.people, 1);
   assert.equal(f.milestone.people, 1);
   // 合計2 だが実人数は1。だから n の併記が必須
-  assert.equal(f.career.people + f.milestone.people, 2);
+  assert.equal(f.career_change.people + f.milestone.people, 2);
   assert.equal(people.length, 1);
 });
 
@@ -249,4 +260,15 @@ test("variantFunnels は personOutcomes と同じ数字を返す（回帰）", (
   assert.equal(v.story_preview_v1.multiDay, 1);
   assert.equal(v.baseline.people, 1);
   assert.equal(v.baseline.nextDayReturn, 0);
+});
+
+test("旧コードは画面の選択肢から消えるが、Admin では読める", () => {
+  // ⚠ 整理前に答えた人の回答を黙って消さないための保険
+  assert.equal(STATES.includes("career" as never), false);
+  assert.deepEqual(
+    axisKeys("state", row({ states: ["career", "milestone"] })),
+    ["career", "milestone"]
+  );
+  assert.match(axisLabel("state", "career"), /旧/);
+  assert.equal(axisLabel("state", "milestone"), "人生の節目を感じている");
 });

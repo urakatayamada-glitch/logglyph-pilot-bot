@@ -46,12 +46,21 @@ export const GENDER_LABELS: Record<Gender, string> = {
   no_answer: "答えたくない",
 };
 
-/** 今の自分に近い状態（複数選択）。Segmentation の中心。 */
+/**
+ * 今の自分に近い状態（複数選択）。Segmentation の中心。
+ *
+ * 2026-09-13 に整理（ChatGPT レビュー / オーナー判断 A案）:
+ *   「仕事やキャリアについて考えている」「転職／独立／起業などの変化がある」
+ *   「新しい挑戦をしている／始めたい」が近すぎて、回答者が迷っていた。
+ *
+ * ⚠ 旧コードは LEGACY_STATE_LABELS に残す。消すと、整理前に答えた人の
+ *   回答が Admin から黙って消える。混ざった集計になるほうがまだよい。
+ *   （黙ってデータを捨てるコードで一度痛い目を見ている）
+ */
 export const STATES = [
-  "career",
-  "transition",
-  "challenge",
+  "career_change",
   "family",
+  "challenge",
   "milestone",
   "looking_back",
   "no_change",
@@ -60,15 +69,28 @@ export const STATES = [
 export type ProfileState = (typeof STATES)[number];
 
 export const STATE_LABELS: Record<ProfileState, string> = {
-  career: "仕事やキャリアについて考えている",
-  transition: "転職／独立／起業などの変化がある",
-  challenge: "新しい挑戦をしている／始めたい",
-  family: "子育てや家族について考えることが増えた",
+  career_change: "仕事やキャリアに変化がある",
+  family: "家族や子育てについて考えることが増えた",
+  challenge: "新しい挑戦を始めたい",
   milestone: "人生の節目を感じている",
   looking_back: "最近、自分の過去を振り返ることがある",
   no_change: "特に大きな変化はない",
   other: "その他",
 };
+
+/**
+ * 整理前（2026-09-13 以前）に保存された値。
+ * 新規の画面には出さないが、Admin では読めるようにする。
+ */
+export const LEGACY_STATES = ["career", "transition"] as const;
+
+export const LEGACY_STATE_LABELS: Record<string, string> = {
+  career: "（旧）仕事やキャリアについて考えている",
+  transition: "（旧）転職／独立／起業などの変化がある",
+};
+
+/** 画面に出す選択肢 ＋ 集計で読む必要がある旧コード。 */
+export const ALL_STATE_CODES = [...STATES, ...LEGACY_STATES] as const;
 
 /** 試してみようと思った理由（複数選択）。 */
 export const MOTIVES = [
@@ -146,48 +168,47 @@ function pickMany<T extends string>(allowed: readonly T[], v: unknown): T[] {
 }
 
 /**
- * 受け取った値を既知の選択肢だけに絞る。
+ * 送られてきた回答を、DB の列名の差分に変換する。
  *
- * ⚠ 知らない値は黙って捨てず、捨てた事実が分かるように呼び出し側で数える。
- *   （進捗バーが 0% のままだった原因は、捨てたものを記録していなかったこと）
+ * ⚠ 3ステップに分割したので、1回の送信には一部の設問しか入らない。
+ *   渡されなかった設問の列は**触らない**こと。
+ *   全列を毎回書くと、STEP 2 の送信で STEP 1 の回答が空で上書きされる。
+ *
+ * ⚠ 知らない値は捨てるが、捨てた件数を返す。黙って握りつぶさない。
  */
-export function sanitizeAnswers(input: unknown): {
-  answers: ProfileAnswers;
+export function toDbPatch(input: unknown): {
+  patch: Record<string, unknown>;
   dropped: number;
+  hasAny: boolean;
 } {
   const o = (input ?? {}) as Record<string, unknown>;
-  const answers: ProfileAnswers = {
-    ageBand: pickOne(AGE_BANDS, o.ageBand),
-    gender: pickOne(GENDERS, o.gender),
-    states: pickMany(STATES, o.states),
-    motives: pickMany(MOTIVES, o.motives),
-    reflectHabit: pickOne(REFLECT_HABITS, o.reflectHabit),
-  };
-  const given = (v: unknown) => (Array.isArray(v) ? v.length : v == null ? 0 : 1);
-  const before =
-    given(o.ageBand) +
-    given(o.gender) +
-    given(o.states) +
-    given(o.motives) +
-    given(o.reflectHabit);
-  const after =
-    (answers.ageBand ? 1 : 0) +
-    (answers.gender ? 1 : 0) +
-    answers.states.length +
-    answers.motives.length +
-    (answers.reflectHabit ? 1 : 0);
-  return { answers, dropped: Math.max(0, before - after) };
-}
+  const has = (k: string) => Object.prototype.hasOwnProperty.call(o, k);
+  const patch: Record<string, unknown> = {};
+  let dropped = 0;
+  let hasAny = false;
 
-/** 1つでも答えていれば「回答済み」。 */
-export function hasAnyAnswer(a: ProfileAnswers): boolean {
-  return (
-    a.ageBand != null ||
-    a.gender != null ||
-    a.reflectHabit != null ||
-    a.states.length > 0 ||
-    a.motives.length > 0
-  );
+  const one = <T extends string>(key: string, col: string, allowed: readonly T[]) => {
+    if (!has(key)) return;
+    const v = pickOne(allowed, o[key]);
+    if (v == null && o[key] != null) dropped += 1;
+    patch[col] = v;
+    if (v != null) hasAny = true;
+  };
+  const many = <T extends string>(key: string, col: string, allowed: readonly T[]) => {
+    if (!has(key)) return;
+    const v = pickMany(allowed, o[key]);
+    if (Array.isArray(o[key])) dropped += Math.max(0, (o[key] as unknown[]).length - v.length);
+    patch[col] = v;
+    if (v.length > 0) hasAny = true;
+  };
+
+  many("states", "states", STATES);
+  many("motives", "motives", MOTIVES);
+  one("reflectHabit", "reflect_habit", REFLECT_HABITS);
+  one("ageBand", "age_band", AGE_BANDS);
+  one("gender", "gender", GENDERS);
+
+  return { patch, dropped, hasAny };
 }
 
 /* ============================================================
@@ -240,7 +261,8 @@ export function axisKeys(
   if (!row) return [];
   switch (axis) {
     case "state":
-      return pickMany(STATES, row.states);
+      // ⚠ 旧コードも拾う。整理前の回答を消さないため
+      return pickMany(ALL_STATE_CODES, row.states);
     case "motive":
       return pickMany(MOTIVES, row.motives);
     case "reflect": {
@@ -261,7 +283,9 @@ export function axisKeys(
 export function axisLabel(axis: ProfileAxis, key: string): string {
   switch (axis) {
     case "state":
-      return STATE_LABELS[key as ProfileState] ?? key;
+      return (
+        STATE_LABELS[key as ProfileState] ?? LEGACY_STATE_LABELS[key] ?? key
+      );
     case "motive":
       return MOTIVE_LABELS[key as ProfileMotive] ?? key;
     case "reflect":
@@ -277,7 +301,7 @@ export function axisLabel(axis: ProfileAxis, key: string): string {
 export function axisOrder(axis: ProfileAxis): readonly string[] {
   switch (axis) {
     case "state":
-      return STATES;
+      return ALL_STATE_CODES;
     case "motive":
       return MOTIVES;
     case "reflect":

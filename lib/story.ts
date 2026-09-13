@@ -64,42 +64,42 @@ export interface SlotDef {
 
 export const CATEGORY_SLOTS: Record<NarrativeCategory, SlotDef[]> = {
   setting: [
-    { slot: "when", hint: "いつ頃のことか", missing: "それがいつ頃のことだったのか" },
-    { slot: "where", hint: "どこでのことか", missing: "それがどこでのことだったのか" },
+    { slot: "when", hint: "いつ頃のことか", missing: "いつ頃の出来事だったのか" },
+    { slot: "where", hint: "どこでのことか", missing: "どんな場所で起きたのか" },
     {
       slot: "place_kind",
       hint: "そこはどんな場所だったか",
-      missing: "その場所が、どんなところだったのか",
+      missing: "その場所の空気はどんなものだったか",
     },
   ],
   characters: [
-    { slot: "who", hint: "誰がいたか", missing: "その場に、ほかに誰がいたのか" },
+    { slot: "who", hint: "誰がいたか", missing: "ほかに誰がいたのか" },
     {
       slot: "relation",
       hint: "その人とどんな関係だったか",
-      missing: "その人とは、どんな関係だったのか",
+      missing: "その人との関係",
     },
     {
       slot: "presence",
       hint: "その人は何をしていたか",
-      missing: "その人が、そこで何をしていたのか",
+      missing: "その人がそこで何をしていたか",
     },
   ],
   self: [
     {
       slot: "wanted",
       hint: "当時なにを目指していたか",
-      missing: "あの頃、本当は何を目指していたのか",
+      missing: "あの頃、何を目指していたか",
     },
     {
       slot: "conflicted",
       hint: "なにに迷っていたか",
-      missing: "そのとき、何に迷っていたのか",
+      missing: "そのとき何に迷っていたか",
     },
     {
       slot: "believed",
       hint: "なにを大事にしていたか",
-      missing: "あの頃、何を大事にしていたのか",
+      missing: "あの頃、何を大事にしていたか",
     },
   ],
   events: [
@@ -192,6 +192,34 @@ export function missingSlots(
   return out;
 }
 
+/** 画面に出す「まだ物語になっていない部分」の上限。 */
+export const MISSING_SHOWN_MAX = 2;
+
+/**
+ * 画面に出す不足項目を選ぶ。
+ *
+ * ⚠ 1カテゴリにつき最大1件。
+ *   missingSlots() は定義順に並ぶので、あるカテゴリが 0% だと
+ *   そのカテゴリの3スロットが丸ごと連続して出る。
+ *   実機（2026-09-13）では「いつ頃 / どこで / どんな場所」が3件並び、
+ *   連続質問＝宿題リストに見えた。件数を減らすだけでは直らない。
+ *   別カテゴリを混ぜることで「余白がある」という見せ方になる。
+ */
+export function missingForDisplay(
+  facets: Facet[],
+  max: number = MISSING_SHOWN_MAX
+): string[] {
+  const seen = new Set<NarrativeCategory>();
+  const out: string[] = [];
+  for (const m of missingSlots(facets)) {
+    if (seen.has(m.category)) continue;
+    seen.add(m.category);
+    out.push(m.missing);
+    if (out.length >= max) break;
+  }
+  return out;
+}
+
 /** 次に補いたいカテゴリ。空きが多い順。Episode の優先抽選に渡す */
 export function neededCategories(facets: Facet[], limit = 2): NarrativeCategory[] {
   const { scores } = scoreFacets(facets);
@@ -223,8 +251,13 @@ export function changedCategories(
      機械的にチェックできるものはコードで止める。違反したら表示しない。
 */
 
-export const FRAGMENT_MIN = 120;
-export const FRAGMENT_MAX = 600;
+export const FRAGMENT_MIN = 110;
+/*
+ * ⚠ 600 は緩すぎた（2026-09-13）。実機で出た文が長く、
+ *   下の進捗まで読まれない。読む負荷を下げるほうを優先する。
+ *   短くしても体験は壊れない。長いと進捗が見られない。
+ */
+export const FRAGMENT_MAX = 420;
 
 /**
  * 断定的な感情語。

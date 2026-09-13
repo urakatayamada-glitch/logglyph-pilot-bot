@@ -7,7 +7,7 @@ import { extractFacets, generateFragment, STORY_PROMPT_VERSION } from "../../../
 import {
   Facet,
   changedCategories,
-  missingSlots,
+  missingForDisplay,
   neededCategories,
   scoreFacets,
   Scores,
@@ -251,8 +251,9 @@ async function buildStory(
     overall,
     previousOverall: beforeResult.overall,
     changed: changedCategories(beforeScores, scores),
-    // 「まだ見えていないもの」は出しすぎない。多いと宿題になる
-    missing: missingSlots(allFacets).slice(0, 3).map((m) => m.missing),
+    // 「まだ物語になっていない部分」。1カテゴリ1件・最大2件。
+    // 同じカテゴリが並ぶと連続質問に見える（実機で確認済み）
+    missing: missingForDisplay(allFacets),
     need: neededCategories(allFacets),
   };
 }

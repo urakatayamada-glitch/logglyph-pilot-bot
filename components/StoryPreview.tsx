@@ -128,7 +128,7 @@ export default function StoryPreview({
 
       {story.missing.length > 0 && (
         <>
-          <p className="story-sub">まだ見えていないもの</p>
+          <p className="story-sub">まだ物語になっていない部分</p>
           <ul className="story-missing">
             {story.missing.map((m, i) => (
               <li key={i}>{m}</li>

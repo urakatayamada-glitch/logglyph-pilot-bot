@@ -15,6 +15,8 @@ import {
   emptyScores,
   isNarrativeCategory,
   missingSlots,
+  missingForDisplay,
+  FRAGMENT_MAX,
   neededCategories,
   factLines,
   preferredPool,
@@ -223,7 +225,7 @@ test("unknownLines：確定していない項目を全部並べる", () => {
   ]);
   assert.equal(un.length, 14, "15スロット中1つ埋まっているので14");
   assert.ok(
-    un.some((u) => u.includes("どこでのことだったのか")),
+    un.some((u) => u.includes("どんな場所で起きたのか")),
     "場所が未確定なら、断定しない項目に入る"
   );
 });
@@ -236,8 +238,8 @@ test("factLines と unknownLines は重ならない（シーンと不足表示�
   const known = factLines(facets).join("\n");
   const unknown = unknownLines(facets).join("\n");
   assert.ok(known.includes("沖縄の中部"));
-  assert.ok(!unknown.includes("どこでのことだったのか"), "確定した項目は不足に出ない");
-  assert.ok(unknown.includes("いつ頃のことだったのか"), "未確定の項目は不足に出る");
+  assert.ok(!unknown.includes("どんな場所で起きたのか"), "確定した項目は不足に出ない");
+  assert.ok(unknown.includes("いつ頃の出来事だったのか"), "未確定の項目は不足に出る");
 });
 
 /* ---------- 抽出に渡す会話の形 ---------- */
@@ -397,4 +399,54 @@ test("checkFragment : 「彼ら」「彼方」は本人を指さないので通�
 test("checkFragment : 助詞を伴わない語（男の子たち等）までは潰さない", () => {
   // 本人以外を指す描写まで禁じると表現が死ぬ
   assert.equal(checkFragment("あ".repeat(200) + "男の子たちが走っていた。", "").ok, true);
+});
+
+
+/* ============================================================
+   「まだ物語になっていない部分」の見せ方（2026-09-13）
+   ============================================================
+   実機では「いつ頃 / どこで / どんな場所」の3件が並び、連続質問に見えた。
+   3件とも「舞台・景色」カテゴリの中身で、0% のカテゴリのスロットが
+   丸ごと連続して出る構造だった。件数を減らすだけでは直らない。
+*/
+
+test("missingForDisplay : 同じカテゴリを2件出さない", () => {
+  // 何も埋まっていない＝全カテゴリ 0%。実機と同じ条件
+  const shown = missingForDisplay([]);
+  assert.equal(shown.length, 2);
+  const all = missingSlots([]);
+  const cats = shown.map((m) => all.find((x) => x.missing === m)!.category);
+  assert.notEqual(cats[0], cats[1], "同じカテゴリが並ぶと連続質問に見える");
+});
+
+test("missingForDisplay : 実機で出た3連続（いつ頃/どこで/どんな場所）が再現しない", () => {
+  const shown = missingForDisplay([]);
+  const settingWords = ["いつ頃の出来事", "どんな場所で起きた", "その場所の空気"];
+  const hits = shown.filter((m) => settingWords.some((w) => m.includes(w)));
+  assert.ok(hits.length <= 1, "舞台・景色から2件以上出してはいけない");
+});
+
+test("missingForDisplay : 埋まったカテゴリは飛ばす", () => {
+  const facets = [
+    { category: "setting", slot: "when", value: "高校のとき" },
+    { category: "setting", slot: "where", value: "うるま市" },
+    { category: "setting", slot: "place_kind", value: "海沿い" },
+  ];
+  const shown = missingForDisplay(facets);
+  assert.equal(shown.length, 2);
+  for (const m of shown) {
+    assert.ok(!m.includes("いつ頃の出来事"), "埋まった項目は出さない");
+    assert.ok(!m.includes("どんな場所で起きた"), "埋まった項目は出さない");
+  }
+});
+
+test("missingForDisplay : 全部埋まっていれば何も出さない", () => {
+  const facets = NARRATIVE_CATEGORIES.flatMap((c) =>
+    CATEGORY_SLOTS[c].map((d) => ({ category: c, slot: d.slot, value: "x" }))
+  );
+  assert.deepEqual(missingForDisplay(facets), []);
+});
+
+test("脚本の上限は読み切れる長さ（実機で長すぎた）", () => {
+  assert.ok(FRAGMENT_MAX <= 420, "600字は長い。下の進捗まで読まれない");
 });

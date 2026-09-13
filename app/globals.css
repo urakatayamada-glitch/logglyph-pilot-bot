@@ -1000,3 +1000,5 @@ button.ghost.restart{margin-top:18px}
 /* n が小さい行は薄くする。読み手に「参考値」だと分からせるため */
 .cmp tbody tr.cmp-thin th,
 .cmp tbody tr.cmp-thin td{opacity:.62}
+/* ステップ表示。見出しの右に小さく出す */
+.profile-step{color:var(--ink-soft);letter-spacing:.1em;margin-left:6px}

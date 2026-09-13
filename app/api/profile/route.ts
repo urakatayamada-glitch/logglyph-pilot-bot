@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSupabaseAdmin } from "../../../lib/supabase-server";
 import { isClientToken } from "../../../lib/found";
-import { sanitizeAnswers, hasAnyAnswer } from "../../../lib/profile";
+import { toDbPatch } from "../../../lib/profile";
 
 /**
  * プロフィールの保存（profile_v1）。
@@ -49,13 +49,19 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: true, persisted: true });
     }
 
-    const { answers, dropped } = sanitizeAnswers(body?.answers);
+    /*
+     * ⚠ 3ステップに分割したので、1回の送信には一部の設問しか入らない。
+     *   渡されなかった列は触らない（PostgREST の upsert は
+     *   payload にある列だけを更新する）。
+     *   全列を毎回書くと STEP 2 の送信で STEP 1 の回答が消える。
+     */
+    const { patch, dropped, hasAny } = toDbPatch(body?.answers);
     if (dropped > 0) {
       // 捨てたものは必ず記録する（黙って握りつぶさない）
       console.warn("profile values dropped", { dropped });
     }
-    if (!hasAnyAnswer(answers)) {
-      // 全部空で「送る」を押した場合はスキップと同じ扱い
+    if (Object.keys(patch).length === 0) {
+      // 何も送られてこなかった＝スキップと同じ扱い
       const { error } = await supabase.from("client_profiles").upsert(
         { client_token: token, first_shown_at: now, updated_at: now },
         { onConflict: "client_token", ignoreDuplicates: true }
@@ -64,23 +70,26 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: true, persisted: true, answered: false });
     }
 
-    const { error } = await supabase.from("client_profiles").upsert(
-      {
-        client_token: token,
-        states: answers.states,
-        motives: answers.motives,
-        reflect_habit: answers.reflectHabit,
-        age_band: answers.ageBand,
-        gender: answers.gender,
-        answered: true,
-        answered_at: now,
-        updated_at: now,
-      },
-      { onConflict: "client_token" }
-    );
+    /*
+     * ⚠ answered は一度 true になったら下げない。
+     *   STEP 1 で答えて STEP 3 を空で送った人を「未回答」に戻さないため。
+     */
+    const row: Record<string, unknown> = {
+      client_token: token,
+      ...patch,
+      updated_at: now,
+    };
+    if (hasAny) {
+      row.answered = true;
+      row.answered_at = now;
+    }
+
+    const { error } = await supabase
+      .from("client_profiles")
+      .upsert(row, { onConflict: "client_token" });
     if (error) throw error;
 
-    return NextResponse.json({ ok: true, persisted: true, answered: true });
+    return NextResponse.json({ ok: true, persisted: true, answered: hasAny });
   } catch (error) {
     // トークンも回答値もログへ出さない
     console.error("profile save failed", (error as Error)?.message);
