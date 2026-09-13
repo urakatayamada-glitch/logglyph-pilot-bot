@@ -243,9 +243,39 @@ export const FORBIDDEN_ASSERTIONS = [
   "救われた",
 ] as const;
 
+/**
+ * 本人の属性を決めつける語。
+ *
+ * ⚠ 視点を変えるのは許可されている（オーナー判断：表現は大胆にしてよい）。
+ *   しかし「彼」「彼女」は視点ではなく、本人の性別の断定である。
+ *   本人は性別を話していないし、同じ画面のすぐ下で性別を質問している。
+ *   そこで性別を決めつけているのは、「まだ見えていないもの」と
+ *   シーンが矛盾したのと同じ構造の不具合（2026-09-13 実機で発見）。
+ *
+ * ⚠ 抽象的な禁止はモデルに守られない。機械的に検査できる形にすること。
+ *   このリストは「含まれていたら作り直す」ために使う。
+ */
+export const FORBIDDEN_PERSON_WORDS = [
+  "彼女",  // ⚠ 「彼」より先に置く。先に「彼」で当たると理由が不正確になる
+  "彼氏",
+  "彼",
+  "男性",
+  "女性",
+  "少年",
+  "少女",
+  "青年",
+  "女",
+  "男",
+] as const;
+
 export interface FragmentCheck {
   ok: boolean;
-  reason?: "too_short" | "too_long" | "invented_number" | "asserted_emotion";
+  reason?:
+    | "too_short"
+    | "too_long"
+    | "invented_number"
+    | "asserted_emotion"
+    | "asserted_person";
   detail?: string;
 }
 
@@ -278,6 +308,26 @@ export function checkFragment(body: string, sourceText: string): FragmentCheck {
     const after = text.slice(i, i + w.length + 20);
     if (/かもしれない|のだろうか|ようにも見え/.test(after)) continue;
     return { ok: false, reason: "asserted_emotion", detail: w };
+  }
+
+  /*
+   * 本人の属性の決めつけ。
+   * ⚠ 「彼ら」「彼方」のような別語に当たらないよう、直後の文字を見る。
+   */
+  for (const w of FORBIDDEN_PERSON_WORDS) {
+    let from = 0;
+    for (;;) {
+      const i = text.indexOf(w, from);
+      if (i < 0) break;
+      from = i + w.length;
+      const next = text[i + w.length] ?? "";
+      if (w === "彼" && /ら|方|岸|女|氏/.test(next)) continue;
+      // 「男の子」「女の人」は複合語。本人以外を指す描写まで潰すと表現が死ぬ
+      if ((w === "男" || w === "女") && next === "の") continue;
+      // 直後が助詞（＝主語として立っている）ときだけ弾く
+      if (!/は|が|の|に|を|も|へ|と|、|。/.test(next)) continue;
+      return { ok: false, reason: "asserted_person", detail: w };
+    }
   }
 
   return { ok: true };

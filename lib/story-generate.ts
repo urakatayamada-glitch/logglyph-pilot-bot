@@ -254,6 +254,8 @@ const FRAGMENT_SYSTEM = `あなたは、ある人が話した記憶を、ひと�
 
 「確かなこと」に書かれていない次のものを、新しい事実として断定しない。
   場所 / 日時 / 人物 / 出来事 / 連絡手段 / 天候 / 音 / 身体動作 / 感情
+  本人の属性（性別 / 年齢 / 職業 / 家族構成 / 住まい）
+  作品名・ジャンル・商品名（「映画」を「ヒューマンドラマ」にしない）
 
 書かれていない部分は、埋めずに余白として残す。
 どうしても触れる必要があるときは、特定しない形にする。
@@ -270,9 +272,21 @@ const FRAGMENT_SYSTEM = `あなたは、ある人が話した記憶を、ひと�
 本人の言葉やニュアンスは、会話からそのまま拾ってよい。
 
 【形式】
-- 三人称で書く。「あなた」と呼びかけない
 - 200字から400字
-- 診断・性格づけをしない`;
+- 診断・性格づけをしない
+
+【人称】
+
+⚠ 「彼」「彼女」を使わない。「あなた」とも呼びかけない。
+  本人は性別を話していない。三人称代名詞はそれだけで性別を決めつける。
+
+主語を置かずに書く。日本語は主語が無くても成立する。
+  「彼は夢の中へ沈んでいく」→ ×（性別を決めつけている）
+  「夢の中へ沈んでいく」    → ○
+  「彼の心に灯がともる」    → ×
+  「心に灯がともる」        → ○
+
+どうしても指す必要があるときは「その人」とする。`;
 
 export interface FragmentResult {
   body: string | null;
@@ -318,30 +332,58 @@ export async function generateFragment(
     unknown.join("\n"),
   ].join("\n");
 
+  /*
+   * ⚠ 数字の照合に会話全体を使わないこと。
+   *   会話には最初のEpisode（別の人の話）が含まれるので、
+   *   そこに出てきた数字をシーンが使えてしまう。
+   *   照合してよいのは本人の発言と、確定した事実だけ。
+   */
+  const factual = [userText(messages), oneLineMemory ?? "", ...facets.map((f) => f.value)]
+    .join("\n")
+    .trim();
+
   try {
-    const res = await client.chat.completions.create({
-      model: MODELS.extraction,
-      messages: [
-        { role: "system", content: FRAGMENT_SYSTEM },
-        { role: "user", content: brief },
-      ],
-    });
-    const body = res.choices[0]?.message?.content?.trim() ?? "";
     /*
-     * ⚠ 数字の照合に会話全体を使わないこと。
-     *   会話には最初のEpisode（別の人の話）が含まれるので、
-     *   そこに出てきた数字をシーンが使えてしまう。
-     *   照合してよいのは本人の発言と、確定した事実だけ。
+     * 人称の決めつけだけは作り直す。
+     *
+     * ⚠ 1回だけ。落ちたら何も出さない（誤った断定を出すよりはよい）。
+     * ⚠ 他の理由（長さ・数字・感情の断定）では作り直さない。
+     *   それらは指示を強めても直らず、呼び出しが倍になるだけ。
+     *   人称は「使うな」と名指しできるので、作り直す価値がある。
      */
-    const factual = [userText(messages), oneLineMemory ?? "", ...facets.map((f) => f.value)]
-      .join("\n")
-      .trim();
-    const check = checkFragment(body, factual);
-    if (!check.ok) {
-      console.warn("fragment rejected", { reason: check.reason, detail: check.detail });
-      return { body: null, rejected: check.reason };
+    let last: ReturnType<typeof checkFragment> = { ok: false };
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const res = await client.chat.completions.create({
+        model: MODELS.extraction,
+        messages: [
+          { role: "system", content: FRAGMENT_SYSTEM },
+          { role: "user", content: brief },
+          ...(attempt === 0
+            ? []
+            : [
+                {
+                  role: "system" as const,
+                  content:
+                    "さきほどの文には「" +
+                    (last.detail ?? "") +
+                    "」が入っていた。本人の属性を決めつけている。" +
+                    "主語を置かずに書き直すこと。「彼」「彼女」「あなた」は使わない。",
+                },
+              ]),
+        ],
+      });
+      const body = res.choices[0]?.message?.content?.trim() ?? "";
+      const check = checkFragment(body, factual);
+      if (check.ok) return { body };
+      last = check;
+      console.warn("fragment rejected", {
+        attempt,
+        reason: check.reason,
+        detail: check.detail,
+      });
+      if (check.reason !== "asserted_person") break;
     }
-    return { body };
+    return { body: null, rejected: last.reason };
   } catch (error) {
     console.error("fragment generation failed", error);
     return { body: null, rejected: "error" };
