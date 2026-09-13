@@ -11,6 +11,9 @@ import { isClientToken, deletedTokenPlaceholder } from "../../../../lib/found";
  *   消す   conversation_logs の本文
  *          one_line_memory / structured_memory
  *          found_notes
+ *          story_fragments（脚色されたシーン）
+ *          memory_facets（記憶の断片）
+ *          client_profiles（本人が自分について答えた内容）
  *   残す   sessions の行そのもの（発話数・memory_found・日時）
  *          client_token はランダム値へ置換し、本人と再び結び付けられなくする
  *
@@ -84,6 +87,49 @@ export async function POST(req: Request) {
       .update({ client_token: placeholder })
       .eq("client_token", token);
     if (entryErr) console.error("entry_views anonymize failed", entryErr);
+
+    // 3b. Story Preview 関連。本人の記憶そのもの、またはそれを脚色した文章。
+    //
+    // ⚠ 0013 で story_fragments / memory_facets を追加したとき、
+    //   この削除処理を更新し忘れていた（2026-09-13 に発見）。
+    //   記録を消したはずの人の「記憶の断片」と「脚色されたシーン」が
+    //   client_token 付きで残っていた。内容そのものなので、行ごと消す。
+    const { error: fragErr } = await supabase
+      .from("story_fragments")
+      .delete()
+      .in("session_id", sessionIds);
+    if (fragErr) console.error("story_fragments delete failed", fragErr);
+
+    const { error: facetErr } = await supabase
+      .from("memory_facets")
+      .delete()
+      .in("session_id", sessionIds);
+    if (facetErr) console.error("memory_facets delete failed", facetErr);
+
+    // 進捗スコアと閲覧記録は内容を含まない（数値と時刻だけ）ので行は残し、
+    // トークンだけ切る。ファネルの分母を後から変えないため。
+    for (const table of [
+      "story_progress_snapshots",
+      "story_views",
+      "receipt_views",
+    ]) {
+      const { error } = await supabase
+        .from(table)
+        .update({ client_token: placeholder })
+        .eq("client_token", token);
+      if (error) console.error(`${table} anonymize failed`, error);
+    }
+
+    // 3c. プロフィール（profile_v1）。本人が自分について答えた内容なので消す。
+    //
+    // ⚠ ここを忘れると、記録を消した人の属性だけが残る。
+    //   行ごと消すため、その人は次に会話したとき再び設問を見ることになる。
+    //   これは意図どおり（消した人は「聞かれていない人」に戻る）。
+    const { error: profErr } = await supabase
+      .from("client_profiles")
+      .delete()
+      .eq("client_token", token);
+    if (profErr) console.error("client_profiles delete failed", profErr);
 
     // 4. sessions は行を残し、内容だけ消してトークンを置換する。
     //    message_count / user_message_count / memory_found / started_at は残す。

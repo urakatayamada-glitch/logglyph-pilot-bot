@@ -963,3 +963,40 @@ button.ghost.restart{margin-top:18px}
 .cmp .cmp-key th{color:var(--ink)}
 .cmp .cmp-ref{color:var(--ink-faint)}
 .cmp td em{color:var(--ink-faint);font-size:10.5px;font-style:normal;margin-left:4px}
+
+/* ------------------------------------------------------------
+   プロフィール設問（profile_v1）
+   ⚠ 選択肢は文が長い（「転職／独立／起業などの変化がある」等）。
+     横に並べると折り返して読めなくなるので、縦1列・左寄せにする。
+     見た目の都合で .rating-row（横並び）に戻さないこと。
+   ------------------------------------------------------------ */
+/* ⚠ 見出しと説明は var(--ink)。
+   --ink-faint(#93a0b0) はこの淡い背景で 2.21:1 しかなく読めない（AA は 4.5:1）。
+   --ink-soft でも 3.83:1 で足りない。既存の .w1-lead と同じ色に戻さないこと。
+   なぜ聞かれるのかが読めないまま属性を聞かれると、体験の最後が「詮索」で終わる。 */
+.profile-h{font-size:11px;letter-spacing:.16em;color:var(--ink-soft);margin:0 0 6px}
+.profile-lead{font-size:12.5px;color:var(--ink);line-height:1.9;margin:0 0 10px}
+.w1-choices{display:flex;flex-direction:column;gap:7px;margin-bottom:4px}
+.chip.wide{
+  width:100%;
+  text-align:left;
+  padding:11px 14px;
+  line-height:1.55;
+}
+
+/* ------------------------------------------------------------
+   プロフィール別の診断表（Admin / profile_v1）
+   ⚠ 見出しは var(--ink) を使うこと。--ink-faint は淡い背景で読めない。
+     （同じ不具合を過去に2回出している）
+   ------------------------------------------------------------ */
+.admin-h3{
+  font-size:13px;
+  color:var(--ink);
+  font-weight:600;
+  margin:18px 0 6px;
+}
+.admin-h3-note{font-size:11px;color:var(--ink-soft);font-weight:400;margin-left:4px}
+.cmp-pct{color:var(--ink-soft);font-size:11px}
+/* n が小さい行は薄くする。読み手に「参考値」だと分からせるため */
+.cmp tbody tr.cmp-thin th,
+.cmp tbody tr.cmp-thin td{opacity:.62}

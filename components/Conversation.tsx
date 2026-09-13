@@ -223,6 +223,8 @@ export default function Conversation({
   const [story, setStory] = useState<StoryData | null>(null);
   /** 前回までの総合％。差分「46% → 52%」を出すため */
   const [previousOverall, setPreviousOverall] = useState<number | null>(null);
+  /** プロフィール設問を出すか。サーバーが決める（原則1人1回）。 */
+  const [profileNeeded, setProfileNeeded] = useState(false);
 
   /** 初期化：前回の会話があれば復元、なければEpisodeで開始 */
   useEffect(() => {
@@ -348,6 +350,7 @@ export default function Conversation({
         });
         const data = await res.json();
         if (data?.oneLineMemory) setOneLineMemory(data.oneLineMemory);
+        setProfileNeeded(Boolean(data?.profileNeeded));
         // 取得できなければ null のまま。件数を出さずに続行する。
         if (typeof data?.memoryCount === "number") setMemoryCount(data.memoryCount);
         if (Array.isArray(data?.recentMemories)) setRecentMemories(data.recentMemories);
@@ -527,6 +530,7 @@ export default function Conversation({
             clientToken={readLS<string>(LS_CLIENT)}
             story={story}
             previousOverall={previousOverall}
+            profileNeeded={profileNeeded}
             restartSlot={
               crisis ? null : (
                 <button className="ghost restart" onClick={restart}>

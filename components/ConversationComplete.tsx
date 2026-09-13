@@ -6,6 +6,7 @@ import MemoryReceipt from "./MemoryReceipt";
 import StoryPreview, { StoryData } from "./StoryPreview";
 import { ExperienceVariant } from "../lib/experience";
 import Wave1Survey, { Wave1Answers } from "./Wave1Survey";
+import ProfileSurvey from "./ProfileSurvey";
 
 /**
  * 会話終了後の表示。
@@ -37,6 +38,7 @@ export default function ConversationComplete({
   clientToken,
   story,
   previousOverall,
+  profileNeeded,
   restartSlot,
 }: {
   oneLineMemory: string | null;
@@ -57,6 +59,11 @@ export default function ConversationComplete({
   /** story_preview_v1 のときだけ入る。生成に失敗したら null */
   story: StoryData | null;
   previousOverall: number | null;
+  /**
+   * プロフィール設問を出すか。サーバーが決める（原則1人1回）。
+   * story_preview_v1 でしか true にならない。
+   */
+  profileNeeded: boolean;
   /**
    * 「別の話をする」。最後の段階に来るまで出さない。
    * 評価の段階で出すと、Future Preview と追加設問を飛ばして
@@ -179,7 +186,23 @@ export default function ConversationComplete({
             </div>
           ) : (
             <>
-              <Wave1Survey onSend={onFollowup} />
+              {/*
+                Product Decision（2026-09-13）:
+                story_preview_v1 では Wave1Survey の4問を出さない。
+                あの4問は Future Preview / 「5日後」を前提に書かれており、
+                Story Preview を見た人に同じ文言で聞くと設問の意味が変わる。
+                （want_five_day_insight は「5日間は使わない」と決めた後も残っていた）
+
+                ⚠ 設問を積み上げないこと。ここを両方出すと完了画面だけで
+                  11回の操作になり、体験の主役が Story Preview でなくなる。
+              */}
+              {isStory ? (
+                profileNeeded ? (
+                  <ProfileSurvey clientToken={clientToken} />
+                ) : null
+              ) : (
+                <Wave1Survey onSend={onFollowup} />
+              )}
               {restartSlot}
             </>
           )}

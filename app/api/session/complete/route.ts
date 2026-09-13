@@ -101,6 +101,15 @@ export async function POST(req: Request) {
        ⚠ 生成に失敗しても終了体験は壊さない。story を null で返すだけ。
     */
     let story: StoryPayload | null = null;
+    /*
+     * プロフィール設問（profile_v1）を出すかどうか。
+     *
+     * ⚠ 判断はサーバー側で行う。クライアントに持たせると、
+     *   localStorage を消した人に何度も出る。
+     * ⚠ 原則1回だけ。回答済みでもスキップ済みでも、行があれば二度と出さない。
+     *   しつこく出すと、いちばん見たい指標（再訪）そのものを壊す。
+     */
+    let profileNeeded = false;
     if (supabase && clientToken && !crisis && structured?.memory_found) {
       try {
         const { data: row } = await supabase
@@ -117,6 +126,18 @@ export async function POST(req: Request) {
             messages,
             structured?.one_line_memory ?? null
           );
+
+          const { data: prof, error: profErr } = await supabase
+            .from("client_profiles")
+            .select("client_token")
+            .eq("client_token", clientToken)
+            .maybeSingle();
+          if (profErr) {
+            // 出せない理由が分かるように残す（黙って false にしない）
+            console.error("profile lookup failed", profErr.message);
+          } else {
+            profileNeeded = prof == null;
+          }
         }
       } catch (error) {
         console.error("story build failed", error);
@@ -130,6 +151,7 @@ export async function POST(req: Request) {
       memoryCount,
       recentMemories,
       story,
+      profileNeeded,
     });
   } catch (error) {
     console.error("session complete failed", error);

@@ -623,6 +623,8 @@ export interface VariantFunnel {
   sameDayContinuation: number;
   nextDayReturn: number;
   newMemoryFound: number;
+  /** active_days >= 2。複数日に跨って使った人。 */
+  multiDay: number;
 }
 
 function emptyVariantFunnel(): VariantFunnel {
@@ -635,6 +637,7 @@ function emptyVariantFunnel(): VariantFunnel {
     sameDayContinuation: 0,
     nextDayReturn: 0,
     newMemoryFound: 0,
+    multiDay: 0,
   };
 }
 
@@ -645,13 +648,32 @@ function emptyVariantFunnel(): VariantFunnel {
  * 所属を決める。フラグを切り替えた前後に跨って使った人は、切り替え前の条件に入る。
  * （跨った人を両方に数えると、どちらの数字も読めなくなる）
  */
-export function variantFunnels(args: {
+/**
+ * 人単位の結果。ここが唯一の集計ロジック。
+ *
+ * ⚠ 集計軸（体験条件別 / プロフィール別）が増えても、必ずここを通すこと。
+ *   軸ごとに数え方を書くと、同じ画面で数字が食い違う。
+ */
+export interface PersonOutcome {
+  clientToken: string;
+  variant: string;
+  completed: boolean;
+  memoryFound: boolean;
+  receiptViewed: boolean;
+  storyViewed: boolean;
+  sameDayContinuation: boolean;
+  nextDayReturn: boolean;
+  newMemoryFound: boolean;
+  activeDays: number;
+}
+
+export function personOutcomes(args: {
   sessions: VariantSessionRow[];
   receiptSessionIds: Iterable<string>;
   storySessionIds?: Iterable<string>;
   internalTokens: Iterable<string>;
   includeInternal: boolean;
-}): Record<string, VariantFunnel> {
+}): PersonOutcome[] {
   const receipts = new Set(args.receiptSessionIds);
   const stories = new Set(args.storySessionIds ?? []);
   const internal = new Set(args.internalTokens);
@@ -666,37 +688,96 @@ export function variantFunnels(args: {
     byToken.set(s.client_token, list);
   }
 
-  const out: Record<string, VariantFunnel> = {};
-  const bucket = (key: string) => (out[key] ??= emptyVariantFunnel());
+  const out: PersonOutcome[] = [];
 
-  for (const list of byToken.values()) {
+  for (const [token, list] of byToken) {
     const ordered = [...list].sort((a, b) =>
       a.started_at < b.started_at ? -1 : a.started_at > b.started_at ? 1 : 0
     );
-    const variant = ordered[0].experience_variant ?? "baseline";
-    const f = bucket(variant);
 
-    f.people += 1;
-    if (ordered.some((s) => s.completed_at)) f.completed += 1;
-    if (ordered.some((s) => receipts.has(s.session_id))) f.receiptViewed += 1;
-    if (ordered.some((s) => stories.has(s.session_id))) f.storyViewed += 1;
+    const o: PersonOutcome = {
+      clientToken: token,
+      variant: ordered[0].experience_variant ?? "baseline",
+      completed: ordered.some((s) => s.completed_at),
+      memoryFound: false,
+      receiptViewed: ordered.some((s) => receipts.has(s.session_id)),
+      storyViewed: ordered.some((s) => stories.has(s.session_id)),
+      sameDayContinuation: false,
+      nextDayReturn: false,
+      newMemoryFound: false,
+      activeDays: countActiveDaysJst(ordered.map((s) => s.started_at)),
+    };
 
     const firstMemory = ordered.find((s) => s.memory_found);
-    if (!firstMemory) continue;
-    f.memoryFound += 1;
+    if (firstMemory) {
+      o.memoryFound = true;
+      // 起点。終了時刻が取れなければ開始時刻で代用する
+      const origin = firstMemory.completed_at ?? firstMemory.started_at;
+      const after = ordered.filter((s) => s.started_at > origin);
+      if (after.length > 0) {
+        // 1人は1回だけ数える。両方あるときは Next-Day を採る（強いシグナル）
+        if (after.some((s) => isNextDayReturnJst(origin, s.started_at))) {
+          o.nextDayReturn = true;
+        } else {
+          o.sameDayContinuation = true;
+        }
+        o.newMemoryFound = after.some((s) => s.memory_found);
+      }
+    }
 
-    // 起点。終了時刻が取れなければ開始時刻で代用する
-    const origin = firstMemory.completed_at ?? firstMemory.started_at;
-    const after = ordered.filter((s) => s.started_at > origin);
-    if (after.length === 0) continue;
-
-    // 1人は1回だけ数える。両方あるときは Next-Day を採る（強いシグナル）
-    const isNextDay = after.some((s) => isNextDayReturnJst(origin, s.started_at));
-    if (isNextDay) f.nextDayReturn += 1;
-    else f.sameDayContinuation += 1;
-
-    if (after.some((s) => s.memory_found)) f.newMemoryFound += 1;
+    out.push(o);
   }
 
   return out;
+}
+
+/** PersonOutcome の集合を1つのファネルに畳む。 */
+export function foldOutcomes(people: Iterable<PersonOutcome>): VariantFunnel {
+  const f = emptyVariantFunnel();
+  for (const p of people) {
+    f.people += 1;
+    if (p.completed) f.completed += 1;
+    if (p.receiptViewed) f.receiptViewed += 1;
+    if (p.storyViewed) f.storyViewed += 1;
+    if (p.memoryFound) f.memoryFound += 1;
+    if (p.nextDayReturn) f.nextDayReturn += 1;
+    if (p.sameDayContinuation) f.sameDayContinuation += 1;
+    if (p.newMemoryFound) f.newMemoryFound += 1;
+    if (p.activeDays >= 2) f.multiDay += 1;
+  }
+  return f;
+}
+
+/**
+ * 任意のキーでファネルを組み立てる。
+ *
+ * ⚠ keysOf は配列を返す。プロフィールの「現在の状態」「動機」は複数選択なので、
+ *   1人が複数のグループに入る。したがって各グループの人数を足しても総人数にならない。
+ *   画面には必ず n を併記すること。
+ */
+export function cohortFunnels(
+  people: Iterable<PersonOutcome>,
+  keysOf: (p: PersonOutcome) => readonly string[]
+): Record<string, VariantFunnel> {
+  const buckets = new Map<string, PersonOutcome[]>();
+  for (const p of people) {
+    for (const key of keysOf(p)) {
+      const list = buckets.get(key) ?? [];
+      list.push(p);
+      buckets.set(key, list);
+    }
+  }
+  const out: Record<string, VariantFunnel> = {};
+  for (const [key, list] of buckets) out[key] = foldOutcomes(list);
+  return out;
+}
+
+export function variantFunnels(args: {
+  sessions: VariantSessionRow[];
+  receiptSessionIds: Iterable<string>;
+  storySessionIds?: Iterable<string>;
+  internalTokens: Iterable<string>;
+  includeInternal: boolean;
+}): Record<string, VariantFunnel> {
+  return cohortFunnels(personOutcomes(args), (p) => [p.variant]);
 }

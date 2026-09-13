@@ -25,7 +25,21 @@ import {
   ELAPSED_BUCKETS,
   ELAPSED_BUCKET_LABELS,
   variantFunnels,
+  VariantFunnel,
+  personOutcomes,
+  cohortFunnels,
 } from "../../lib/found";
+import {
+  ProfileRow,
+  ProfileAxis,
+  PROFILE_GROUPS,
+  PROFILE_GROUP_LABELS,
+  axisKeys,
+  axisLabel,
+  axisOrder,
+  profileGroup,
+  SMALL_N,
+} from "../../lib/profile";
 import { EXPERIENCE_VARIANTS, VARIANT_LABELS } from "../../lib/experience";
 import { PUBLIC_PILOT } from "../../lib/conversation/config";
 
@@ -240,6 +254,7 @@ export default async function AdminHome({
     internalRes,
     receiptRes,
     storyViewRes,
+    profileRes,
   ] =
     await Promise.all([
     supabase
@@ -259,6 +274,9 @@ export default async function AdminHome({
     supabase.from("internal_clients").select("client_token"),
     supabase.from("receipt_views").select("session_id"),
     supabase.from("story_views").select("session_id"),
+    supabase
+      .from("client_profiles")
+      .select("client_token, age_band, gender, states, motives, reflect_habit, answered"),
   ]);
 
   const entryRows = (entryRes.data ?? []) as Array<{
@@ -292,6 +310,10 @@ export default async function AdminHome({
   const storySessionIds = (
     (storyViewRes.data ?? []) as Array<{ session_id: string }>
   ).map((r) => r.session_id);
+  const profileRows = (profileRes.data ?? []) as ProfileRow[];
+  const profileByToken = new Map<string, ProfileRow>(
+    profileRows.map((r) => [r.client_token, r])
+  );
 
   const stage1Since = entryRows.length > 0 ? entryRows[0].viewed_at : null;
 
@@ -441,6 +463,58 @@ export default async function AdminHome({
     internalTokens,
     includeInternal,
   });
+
+  /* ============================================================
+     プロフィール別の診断（profile_v1）
+     ============================================================
+     ⚠ 統計ではない。n が小さく、1人の増減で比率が大きく動く。
+     ⚠ 「現在の状態」「動機」は複数選択なので、1人が複数行に数えられる。
+       各行の人数を足しても総人数にはならない。
+     ⚠ 対象は story_preview_v1 の人だけ。baseline の人には
+       そもそも設問を出していないので、混ぜると「未表示」が意味を失う。
+  */
+  const storyOutcomes = personOutcomes({
+    sessions: variantScoped.map((r) => ({
+      session_id: r.session_id,
+      client_token: r.client_token,
+      started_at: r.started_at,
+      completed_at: r.completed_at,
+      memory_found: r.memory_found,
+      experience_variant: r.experience_variant,
+    })),
+    receiptSessionIds,
+    storySessionIds,
+    internalTokens,
+    includeInternal,
+  }).filter((p) => p.variant === "story_preview_v1");
+
+  /* 回答 / スキップ / 未表示 の3群。
+     ここに大きな差が出たら、設問そのものが再訪に効いた可能性を疑う。 */
+  const profileGroups = cohortFunnels(storyOutcomes, (p) => [
+    profileGroup(profileByToken.get(p.clientToken)),
+  ]);
+
+  const profileAxes: Array<{ axis: ProfileAxis; title: string; note?: string }> = [
+    { axis: "state", title: "現在の状態別", note: "複数選択。1人が複数行に入る" },
+    { axis: "motive", title: "利用動機別", note: "複数選択。1人が複数行に入る" },
+    { axis: "reflect", title: "振り返り習慣別" },
+    { axis: "age", title: "年代別", note: "参考値。結論には使わない" },
+    { axis: "gender", title: "性別", note: "参考値。結論には使わない" },
+  ];
+  const profileTables = profileAxes.map((a) => ({
+    ...a,
+    rows: (() => {
+      const f = cohortFunnels(storyOutcomes, (p) =>
+        axisKeys(a.axis, profileByToken.get(p.clientToken))
+      );
+      return axisOrder(a.axis)
+        .filter((k) => f[k])
+        .map((k) => ({ key: k, label: axisLabel(a.axis, k), f: f[k] }));
+    })(),
+  }));
+  const profileAnswered = storyOutcomes.filter(
+    (p) => profileByToken.get(p.clientToken)?.answered
+  ).length;
 
   const memoryFoundPeople = new Set(
     allRows
@@ -835,6 +909,49 @@ export default async function AdminHome({
         実態より低く出ます（Wave 1 で実際に起きました）。下の Primary KPI は
         まだ分離していない値です。
       </p>
+
+      {/* ---------- 誰が戻ってきたか（診断用） ---------- */}
+      <h2>誰が戻ってきたか（診断用 / profile_v1）</h2>
+      <p className="admin-note">
+        対象は <b>story_preview_v1 の人だけ</b>（{storyOutcomes.length}人）。うち
+        プロフィールに回答した人 <b>{profileAnswered}人</b>。
+        <br />
+        ⚠ <b>これは統計ではありません。</b>n が小さいため、1人の増減で比率が大きく
+        動きます。「強く刺さった少数に共通する状態があるか」を見るための診断用です。
+        <br />
+        ⚠ 「現在の状態」「利用動機」は<b>複数選択</b>です。1人が複数の行に数えられるため、
+        各行の人数を足しても総人数になりません。
+        <br />
+        ⚠ n &lt; {SMALL_N} の行は参考値です。年代・性別で結論は出せません。
+      </p>
+
+      {/*
+        ⚠ この表は外さないこと。
+          プロフィール設問そのものが再訪に効いてしまった可能性を検出する唯一の手段。
+          3群で Next-Day Return が大きく違うなら、Primary KPI の解釈を疑う。
+      */}
+      <h3 className="admin-h3">回答状況別（設問自体の影響を疑うための表）</h3>
+      <ProfileTable
+        rows={PROFILE_GROUPS.filter((g) => profileGroups[g]).map((g) => ({
+          key: g,
+          label: PROFILE_GROUP_LABELS[g],
+          f: profileGroups[g],
+        }))}
+      />
+
+      {profileTables.map((t) => (
+        <div key={t.axis}>
+          <h3 className="admin-h3">
+            {t.title}
+            {t.note && <span className="admin-h3-note">（{t.note}）</span>}
+          </h3>
+          {t.rows.length === 0 ? (
+            <p className="admin-note">まだ回答がありません。</p>
+          ) : (
+            <ProfileTable rows={t.rows} />
+          )}
+        </div>
+      ))}
 
       {/* ---------- 体験条件の比較 ---------- */}
       <h2>体験条件の比較（baseline / memory_receipt_v1）</h2>
@@ -1239,6 +1356,57 @@ function Stat({
       <div className="stat-label">{label}</div>
       <div className="stat-value">{value}</div>
       {note && <div className="stat-note">{note}</div>}
+    </div>
+  );
+}
+
+/**
+ * プロフィール別の1枚。
+ *
+ * ⚠ n を必ず先頭列に出すこと。率だけ見せると、1人の行が
+ *   100% として読まれる。
+ */
+function ProfileTable({
+  rows,
+}: {
+  rows: Array<{ key: string; label: string; f: VariantFunnel }>;
+}) {
+  const pct = (n: number, d: number) => (d > 0 ? `${Math.round((n / d) * 100)}%` : "-");
+  return (
+    <div className="cmp-wrap">
+      <table className="cmp">
+        <thead>
+          <tr>
+            <th />
+            <th>n</th>
+            <th>Memory Found</th>
+            <th>Story Viewed</th>
+            <th>Next-Day Return</th>
+            <th>複数日利用</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.key} className={r.f.people < SMALL_N ? "cmp-thin" : ""}>
+              <th>{r.label}</th>
+              <td>{r.f.people}</td>
+              <td>
+                {r.f.memoryFound} <span className="cmp-pct">{pct(r.f.memoryFound, r.f.people)}</span>
+              </td>
+              <td>
+                {r.f.storyViewed} <span className="cmp-pct">{pct(r.f.storyViewed, r.f.people)}</span>
+              </td>
+              <td className="cmp-key">
+                {r.f.nextDayReturn}{" "}
+                <span className="cmp-pct">{pct(r.f.nextDayReturn, r.f.people)}</span>
+              </td>
+              <td>
+                {r.f.multiDay} <span className="cmp-pct">{pct(r.f.multiDay, r.f.people)}</span>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
