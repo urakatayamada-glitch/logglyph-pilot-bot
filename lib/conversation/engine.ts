@@ -10,10 +10,12 @@ import {
   userAddedMaterial,
 } from "./phase";
 import { BASE_PROMPT } from "./prompts/base";
+import { isEcho, lastUserText, previousTurnEchoed } from "../echo";
 import {
   CLOSING_AFTER_MEMORY,
   CLOSING_PROMPT,
   EXPLORING_PROMPT,
+  AVOID_ECHO_THIS_TURN,
   NO_QUESTION_THIS_TURN,
   SENSITIVE_TOPIC_PROMPT,
   WRAP_UP_PROMPT,
@@ -49,6 +51,8 @@ export function buildSystemPrompt(
   opts: {
     sensitive?: boolean;
     noQuestion?: boolean;
+    /** 直前のターンで相手の言葉をなぞっていたか（v1.6.0） */
+    avoidEcho?: boolean;
     /** 直前に具体的な場面が語られたか（CLOSING でのみ使う） */
     receivedMemory?: boolean;
   } = {}
@@ -56,6 +60,8 @@ export function buildSystemPrompt(
   const parts = [BASE_PROMPT, phaseInstruction(phase)];
   // 質問の連続を、promptのお願いではなくサーバー側の判定で止める
   if (opts.noQuestion && phase !== "CLOSING") parts.push(NO_QUESTION_THIS_TURN);
+  // なぞりの2連続を、promptのお願いではなくサーバー側の判定で止める
+  if (opts.avoidEcho) parts.push(AVOID_ECHO_THIS_TURN);
   // 記憶が出た瞬間に回収して立ち去る終わり方を防ぐ
   if (phase === "CLOSING" && opts.receivedMemory) parts.push(CLOSING_AFTER_MEMORY);
   if (opts.sensitive) parts.push(SENSITIVE_TOPIC_PROMPT);
@@ -119,6 +125,13 @@ export async function runTurn(
   const userCount = countUserMessages(messages);
   const phase = resolvePhase(userCount);
   const noQuestion = shouldBlockQuestion(messages);
+  /*
+   * なぞりの2連続を止める（v1.6.0）。
+   * 直前のAI発話が相手の言葉をなぞっていたら、今回は先に釘を刺す。
+   * ⚠ 1回目のなぞりは止めない。中核ルールとして正しい返し方なので。
+   *   問題は2回続くこと。
+   */
+  const echoedLast = previousTurnEchoed(messages);
 
   const request: OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming = {
     model: MODELS.conversation,
@@ -129,6 +142,7 @@ export async function runTurn(
         content: buildSystemPrompt(phase, {
           ...opts,
           noQuestion,
+          avoidEcho: echoedLast,
           receivedMemory: userAddedMaterial(messages),
         }),
       },
@@ -172,7 +186,47 @@ export async function runTurn(
     };
   }
 
-  const text = choice?.message?.content?.trim();
+  let text = choice?.message?.content?.trim();
+
+  /*
+   * なぞりが2回続いたら、1回だけ作り直す（v1.6.0）。
+   *
+   * ⚠ 発火するのは「直前もなぞっていて、今回もなぞった」ときだけ。
+   *   1回目のなぞりは正しい返し方なので止めない。
+   * ⚠ 作り直しは1回まで。失敗したら元の返答を出す。
+   *   黙って何も返さないより、なぞりでも返すほうがよい。
+   * ⚠ 捨てた／作り直した事実は必ずログに残す。
+   *   黙って握りつぶすと、あとで原因が追えなくなる（実際に3回遠回りした）。
+   */
+  if (echoedLast && text && isEcho(text, lastUserText(messages))) {
+    console.warn("echo twice, regenerating");
+    try {
+      const retry = await client.chat.completions.create({
+        model: MODELS.conversation,
+        temperature: 0.85,
+        messages: [
+          {
+            role: "system",
+            content: buildSystemPrompt(phase, {
+              ...opts,
+              noQuestion,
+              avoidEcho: true,
+              receivedMemory: userAddedMaterial(messages),
+            }),
+          },
+          ...messages.map((m) => ({ role: m.role, content: m.content })),
+        ],
+      });
+      const retried = retry.choices[0]?.message?.content?.trim();
+      if (retried && !isEcho(retried, lastUserText(messages))) {
+        text = retried;
+      } else {
+        console.warn("echo retry did not help");
+      }
+    } catch (error) {
+      console.error("echo retry failed", (error as Error)?.message);
+    }
+  }
 
   // CLOSINGフェーズではAIの応答内容に関わらず終了させる（確実な終了の保証）
   if (phase === "CLOSING") {
