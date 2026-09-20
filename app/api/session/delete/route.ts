@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { randomUUID } from "crypto";
 import { getSupabaseAdmin } from "../../../../lib/supabase-server";
 import { isClientToken, deletedTokenPlaceholder } from "../../../../lib/found";
+import { purgeSessionsFromResults } from "../../../../lib/reading/purge";
+import type { SessionResult } from "../../../../lib/reading/types";
 
 /**
  * 本人による削除。
@@ -130,6 +132,30 @@ export async function POST(req: Request) {
       .delete()
       .eq("client_token", token);
     if (profErr) console.error("client_profiles delete failed", profErr);
+
+    // 3d. Reading Engine Benchmark の保存物。
+    //
+    // ⚠ Benchmark は Signal の引用（本人の発話そのもの）と、
+    //   その人について書かれた読みを保持している。集計値ではなく内容なので消す。
+    //   0013 で同じ漏れをやっているため、追加と同じ turn でここへ足した。
+    try {
+      const { data: runs } = await supabase
+        .from("reading_bench_runs")
+        .select("id, results")
+        .overlaps("session_ids", sessionIds);
+      for (const run of (runs ?? []) as Array<{ id: string; results: unknown }>) {
+        const { kept, removed } = purgeSessionsFromResults(
+          (run.results as SessionResult[]) ?? [],
+          sessionIds
+        );
+        if (removed > 0) {
+          await supabase.from("reading_bench_runs").update({ results: kept }).eq("id", run.id);
+        }
+      }
+      await supabase.from("reading_bench_ratings").delete().in("session_id", sessionIds);
+    } catch (e) {
+      console.error("reading bench purge failed", (e as Error)?.message);
+    }
 
     // 4. sessions は行を残し、内容だけ消してトークンを置換する。
     //    message_count / user_message_count / memory_found / started_at は残す。

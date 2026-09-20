@@ -636,6 +636,9 @@ export default async function AdminHome({
           現在表示：{selectedVersion === "all" ? "All" : (selectedVersion ?? "—")}
           <em>{rows.length} / {allRows.length} セッション</em>
         </span>
+        <Link href="/admin/reading-bench" className="admin-back">
+          Reading Engine Benchmark →
+        </Link>
       </div>
 
       {/*
