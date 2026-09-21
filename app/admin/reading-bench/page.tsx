@@ -47,7 +47,12 @@ export default async function ReadingBenchPage() {
         <p className="admin-error">対象になるセッションがありません。</p>
       )}
 
-      <ReadingBenchRunner sessions={sessions} />
+      <ReadingBenchRunner
+        sessions={sessions}
+        previousIds={
+          ((runs ?? [])[0] as Record<string, unknown> | undefined)?.session_ids as string[] | undefined
+        }
+      />
 
       <h2 style={{ marginTop: 40, fontSize: 14 }}>過去の実行</h2>
       <table className="admin-table">

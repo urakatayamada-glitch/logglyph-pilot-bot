@@ -55,30 +55,34 @@ export const BARNUM_LEXICON = [
   ...BARNUM_LEXICON_SOFT,
 ] as const;
 
-/** 断定を避ける語尾。これしか無い候補は Risk 0 で落とす */
+/**
+ * 断定を避ける言い方。
+ *
+ * ⚠ reading-v1 では「と思う」「じゃないか」という**語尾の型**を探して言い切りを判定していた。
+ *   第1回 Benchmark で、63件中55件がそれで落ちた。実物は「〜である」「〜人物だ」と
+ *   地の文で断定していた。**言い切りではなく、私の口調を測っていた。**
+ *
+ *   v2 では向きを逆にする。「言い切りの型があるか」ではなく
+ *   **「逃げていない文が1つでもあるか」**で判定する。
+ */
 export const HEDGE_PATTERNS = [
-  "かもしれません",
-  "かもしれない",
-  "のかもしれ",
+  "かもしれ",
+  "のかも",
   "ではないでしょうか",
   "気がします",
+  "気がする",
   "ように思えます",
+  "ように見える",
+  "ようだ",
+  "可能性が",
+  "考えられる",
+  "うかがえる",
+  "伺える",
+  "示唆",
   "人もいます",
   "一般に",
   "一般的に",
-] as const;
-
-/** 賭けの言い切り。1つも無ければ Risk 0 */
-export const ASSERT_PATTERNS = [
-  "と思う",
-  "と思います",
-  "じゃないか",
-  "ではないか",
-  "んじゃないか",
-  "に違いない",
-  "はずだ",
-  "だと思う",
-  "賭けてみる",
+  "だろうか",
 ] as const;
 
 function norm(s: string): string {
@@ -101,16 +105,21 @@ export function hedgeHits(text: string): string[] {
   return HEDGE_PATTERNS.filter((w) => t.includes(w));
 }
 
+/** 文に割る（言い切り判定用） */
+function splitSentences(text: string): string[] {
+  return norm(text)
+    .split(/[。！？!?\n]/)
+    .map((x) => x.trim())
+    .filter((x) => x.length >= 4);
+}
+
 /**
- * 言い切りを含むか。
+ * 賭けているか ── 逃げ語を含まない文が1つでもあるか。
  *
- * ⚠ 「かもしれません」だけで終わる文章は、外れようがない。
- *   外れようがない読みは、当たっても意味がない。**Risk 0 として落とす。**
+ * ⚠ 「かもしれません」だけで組み立てた文章は、外れようがない。
+ *   外れようがない読みは、当たっても意味がない。
+ * ⚠ 一方で「〜である」「〜のだ」「〜と思う」は、どれも賭けである。語尾の型は問わない。
  */
 export function hasAssertion(text: string): boolean {
-  const t = norm(text);
-  const asserted = ASSERT_PATTERNS.some((w) => t.includes(w));
-  if (!asserted) return false;
-  // 言い切りより逃げ語のほうが多いなら、実質は逃げている
-  return hedgeHits(text).length < ASSERT_PATTERNS.filter((w) => t.includes(w)).length + 1;
+  return splitSentences(text).some((s) => !HEDGE_PATTERNS.some((h) => s.includes(h)));
 }

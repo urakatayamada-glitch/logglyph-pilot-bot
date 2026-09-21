@@ -63,3 +63,33 @@ export function groundSignals(signals: Signal[], input: ReadingInput): Grounding
   }
   return { grounded, ungrounded };
 }
+
+/**
+ * reading-v2：「どこを見たか」の2点が、生ログ（または振った話）に実在するか。
+ *
+ * ⚠ Reading は「語られた事実同士の間」を指すものと定義した。
+ *   その2点が実在しなければ、指している「間」も存在しない。
+ */
+export type AnchorResult = "ok" | "ungrounded" | "no_gap";
+
+export function checkAnchors(
+  c: { anchorA?: string; anchorASource?: "trigger" | "person"; anchorB?: string },
+  input: ReadingInput
+): AnchorResult {
+  const a = normalizeForMatch(c.anchorA ?? "");
+  const b = normalizeForMatch(c.anchorB ?? "");
+  if (!a || !b) return "no_gap";
+
+  const person = userCorpus(input);
+  const trigger = normalizeForMatch(input.trigger ?? "");
+  const aOk =
+    c.anchorASource === "trigger"
+      ? a.length >= 4 && trigger.includes(a)
+      : isGrounded(c.anchorA ?? "", person);
+  const bOk = isGrounded(c.anchorB ?? "", person);
+  if (!aOk || !bOk) return "ungrounded";
+
+  // 同じ箇所を2回指しているなら、「間」は無い
+  if (a === b || a.includes(b) || b.includes(a)) return "no_gap";
+  return "ok";
+}

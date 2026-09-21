@@ -63,6 +63,18 @@ export interface Candidate {
   id: string;
   text: string;
   basedOn: string[];
+  /**
+   * reading-v2：どこを見たか。**2つの事実の組**で表す。
+   *
+   * ⚠ Reading を「語られた事実同士の間にある、まだ名前のない関係」と定義したので、
+   *   その「間」を構造として持たせる。お願いではなく、欄として必須にする。
+   *   anchorA が trigger のときは「何を振ったのに、何が返ってきたか」（Trigger Delta）。
+   */
+  anchorA?: string;
+  anchorASource?: "trigger" | "person";
+  anchorB?: string;
+  /** 2つの間のズレを1行で */
+  gap?: string;
 }
 
 /** 4軸。各0〜3 */
@@ -76,10 +88,36 @@ export interface Score {
 
 export type DropReason =
   | "grounding"
+  | "no_gap"
+  | "internal_id"
+  | "gender_assertion"
+  | "person_verdict"
+  | "diagnosis"
+  | "advice"
   | "barnum_lexicon"
   | "barnum_swap"
   | "surprise_echo"
   | "no_assertion";
+
+/**
+ * 落ちた理由を、Benchmark の3つの問いに振り分ける。
+ *   generation … そもそも根拠のある読みを作れたか
+ *   form       … 人物評・心理診断・助言ではなく「語りの中のズレ」になっているか
+ *   barnum     … 誰にでも当てはまらないか
+ */
+export const DROP_GROUP: Record<DropReason, "generation" | "form" | "barnum"> = {
+  grounding: "generation",
+  no_gap: "form",
+  internal_id: "form",
+  gender_assertion: "form",
+  person_verdict: "form",
+  diagnosis: "form",
+  advice: "form",
+  no_assertion: "form",
+  barnum_lexicon: "barnum",
+  barnum_swap: "barnum",
+  surprise_echo: "barnum",
+};
 
 export interface EvaluatedCandidate {
   candidate: Candidate;
@@ -122,6 +160,8 @@ export interface SessionResult {
 export interface Attrition {
   sessions: number;
   candidatesGenerated: number;
+  /** 理由ごとの件数（reading-v2 以降。v1 の run には無い） */
+  byReason?: Partial<Record<DropReason, number>>;
   droppedByGrounding: number;
   droppedByNoAssertion: number;
   droppedByBarnumLexicon: number;

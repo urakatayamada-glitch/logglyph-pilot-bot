@@ -120,19 +120,47 @@ export async function POST(req: Request) {
 
     const results = (run.results as SessionResult[]) ?? [];
     const withBet = results.filter((r) => r.openBet);
+
+    /*
+     * 「他人の読み」は**必ず別の人**のセッションから取る。
+     *
+     * ⚠ 第1回では、Open Bet が2件とも山田さんのログだったため、
+     *   「他人の読み」が実は山田さん自身についての読みになり、評価が成立しなかった。
+     *
+     * ⚠ 人の同一性は client_token でしか判定できない。
+     *   ここで読むだけで、Benchmark の保存物には**書き込まない**
+     *   （削除経路が「元トークンを一切残さない」前提で作られているため）。
+     *   山田さんのログは全部同一人物なので、山田さん同士でも組ませない。
+     */
+    const { data: tokRows } = await supabase
+      .from("sessions")
+      .select("session_id, client_token")
+      .in("session_id", withBet.map((r) => r.input.sessionId));
+    const tokenOf = new Map(
+      ((tokRows ?? []) as Array<{ session_id: string; client_token: string | null }>).map((t) => [
+        t.session_id,
+        t.client_token ?? "",
+      ])
+    );
+    const samePerson = (a: SessionResult, b: SessionResult) =>
+      (a.input.isInternal && b.input.isInternal) ||
+      (tokenOf.get(a.input.sessionId) ?? "") === (tokenOf.get(b.input.sessionId) ?? "");
+
     const rows: Array<Record<string, unknown>> = [];
+    let swappedMissing = 0;
 
     withBet.forEach((r, i) => {
-      // 他人の Open Bet（差し替え）。1件しか無ければ作れない
-      const swapped = withBet[(i + 1) % withBet.length];
-      const items = [
+      const swapped = [...withBet.slice(i + 1), ...withBet.slice(0, i)].find(
+        (o) => o !== r && !samePerson(o, r)
+      );
+      const items: Array<{ kind: string; text: string }> = [
         { kind: "open_bet", text: r.openBet!.candidate.text },
         { kind: "decoy", text: decoyFor(i) },
-        {
-          kind: "swapped",
-          text: swapped === r ? decoyFor(i + 1) : swapped.openBet!.candidate.text,
-        },
       ];
+      // ⚠ 別人の読みが無いときは、無理に埋めない（デコイで代用すると測るものが変わる）
+      if (swapped) items.push({ kind: "swapped", text: swapped.openBet!.candidate.text });
+      else swappedMissing += 1;
+
       // ⚠ 並びをずらす。毎回 A がエンジンの出力だと、評価が成立しない
       const slots = ["A", "B", "C"];
       const offset = i % 3;
@@ -155,7 +183,7 @@ export async function POST(req: Request) {
         return NextResponse.json({ ok: false, error: insErr.message }, { status: 500 });
       }
     }
-    return NextResponse.json({ ok: true, sheets: withBet.length });
+    return NextResponse.json({ ok: true, sheets: withBet.length, swappedMissing });
   }
 
   return NextResponse.json({ ok: false, error: "不明なaction" }, { status: 400 });

@@ -20,7 +20,14 @@ export interface RunnerSession {
 
 type Phase = "idle" | "running" | "done" | "error";
 
-export default function ReadingBenchRunner({ sessions }: { sessions: RunnerSession[] }) {
+export default function ReadingBenchRunner({
+  sessions,
+  previousIds = [],
+}: {
+  sessions: RunnerSession[];
+  /** 直前の実行で使ったセッション。前回と同じ条件で比べるため */
+  previousIds?: string[];
+}) {
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [phase, setPhase] = useState<Phase>("idle");
   const [log, setLog] = useState<string[]>([]);
@@ -38,9 +45,20 @@ export default function ReadingBenchRunner({ sessions }: { sessions: RunnerSessi
     });
   }
 
+  /*
+   * 推奨の選び方：山田さんのログを最大10件、残りをテスターで埋めて合計20件。
+   * ⚠ 第1回では山田さんのログが3件しか無く、「10 + 10」のつもりが「3 + 18」になっていた。
+   *   足りないときは、画面にそのまま出す（黙って埋めない）。
+   */
+  const internalAvailable = sessions.filter((s) => s.isInternal).length;
+  function pickPrevious() {
+    const avail = new Set(sessions.map((s) => s.sessionId));
+    setPicked(new Set(previousIds.filter((id) => avail.has(id))));
+  }
+
   function pickRecommended() {
     const internal = sessions.filter((s) => s.isInternal).slice(0, 10);
-    const tester = sessions.filter((s) => !s.isInternal).slice(0, 10);
+    const tester = sessions.filter((s) => !s.isInternal).slice(0, 20 - internal.length);
     setPicked(new Set([...internal, ...tester].map((s) => s.sessionId)));
   }
 
@@ -81,21 +99,37 @@ export default function ReadingBenchRunner({ sessions }: { sessions: RunnerSessi
     }
 
     const fin = await post({ action: "finish", runId: started.runId });
-    setLog((l) => [...l, fin.ok ? `Blind評価シートを${fin.sheets}件作りました。` : `シート作成に失敗：${fin.error}`]);
+    setLog((l) => [
+      ...l,
+      fin.ok
+        ? `Blind評価シートを${fin.sheets}件作りました。` +
+          (fin.swappedMissing ? `（うち${fin.swappedMissing}件は、別の人の読みが無いため2択です）` : "")
+        : `シート作成に失敗：${fin.error}`,
+    ]);
     setPhase("done");
   }
 
   return (
     <section style={{ marginTop: 24 }}>
       <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+        {previousIds.length > 0 && (
+          <button type="button" onClick={pickPrevious} disabled={phase === "running"}>
+            前回と同じ{previousIds.length}件を選ぶ
+          </button>
+        )}
         <button type="button" onClick={pickRecommended} disabled={phase === "running"}>
-          推奨の20件を選ぶ（山田10 + テスター10）
+          推奨の20件を選ぶ
         </button>
         <button type="button" onClick={start} disabled={phase === "running" || picked.size === 0}>
           {phase === "running" ? "実行中…" : `この${picked.size}件で実行`}
         </button>
         <span style={{ color: "var(--ink)", fontSize: 12 }}>
           選択中：山田 {internalPicked} / テスター {testerPicked}
+          {internalAvailable < 10 && (
+            <>
+              {"　"}⚠ 対象にできる山田さんのログは {internalAvailable} 件だけです（発話3回以上）
+            </>
+          )}
         </span>
       </div>
 

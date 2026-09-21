@@ -1,4 +1,5 @@
-import { groundSignals, isGrounded, userCorpus } from "./grounding.ts";
+import { checkAnchors, groundSignals, isGrounded, userCorpus } from "./grounding.ts";
+import { checkForm } from "./form.ts";
 import { rotate, tally } from "./attrition.ts";
 import { hasAssertion, hardLexiconHits, lexiconHits } from "./barnum.ts";
 import { buildScore, isAcceptable, paraphraseRatio } from "./score.ts";
@@ -50,7 +51,11 @@ export async function runSession(
 
     for (const c of candidates) {
       const used = grounded.filter((s) => c.basedOn.includes(s.id));
-      const groundedQuotes = used.filter((s) => isGrounded(s.quote, corpus)).length;
+      const anchors = checkAnchors(c, input);
+      // ⚠ v2：「どこを見たか」の2点も根拠として数える（実在が確認できたときだけ）
+      const groundedQuotes =
+        used.filter((s) => isGrounded(s.quote, corpus)).length + (anchors === "ok" ? 2 : 0);
+      const form = checkForm(c.text);
       const ungroundedQuotes = rawSignals
         .filter((s) => c.basedOn.includes(s.id) && !isGrounded(s.quote, corpus))
         .map((s) => s.quote);
@@ -77,12 +82,22 @@ export async function runSession(
         evaluated.push({ ...base, dropped: reason });
       };
 
-      // S3 接地 ── 根拠が生ログに実在しないなら、書き直させずに破棄する
-      if (groundedQuotes === 0) {
+      // S3 接地 ── 「どこを見たか」の2点が生ログに実在しないなら、書き直させずに破棄する
+      if (anchors === "ungrounded") {
         drop("grounding");
         continue;
       }
-      // Risk の機械ゲート ── 外れようのない文章は、当たっても意味がない
+      // 2点が同じ ＝ 事実同士の「間」が無い。Reading の定義から外れる
+      if (anchors === "no_gap") {
+        drop("no_gap");
+        continue;
+      }
+      // 形 ── 人物評・心理診断・助言・性別の断定・内部IDの混入（種類ごとに数える）
+      if (form.violation) {
+        drop(form.violation);
+        continue;
+      }
+      // 賭けているか ── 逃げ語だけで組み立てた文章は、外れようがない
       if (!assertion) {
         drop("no_assertion");
         continue;

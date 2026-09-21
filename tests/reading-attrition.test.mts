@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { tally } from "../lib/reading/attrition.ts";
+import { droppedTotal, tally } from "../lib/reading/attrition.ts";
 import { coverage, emptyAttrition } from "../lib/reading/types.ts";
 import type { EvaluatedCandidate, ReadingInput, SessionResult } from "../lib/reading/types.ts";
 
@@ -64,14 +64,19 @@ test("落ちた場所ごとに数えられる", () => {
 });
 
 test("落ちた数の合計と生き残りが、生成数と一致する", () => {
-  const a = tally([result(["grounding", "barnum_swap", null], true)]);
-  const dropped =
-    a.droppedByGrounding +
-    a.droppedByNoAssertion +
-    a.droppedByBarnumLexicon +
-    a.droppedByBarnumSwap +
-    a.droppedBySurpriseEcho;
-  assert.equal(dropped + a.survived, a.candidatesGenerated);
+  const a = tally([
+    result(["grounding", "barnum_swap", null], true),
+    result(["person_verdict", "advice", "no_gap"], false),
+  ]);
+  assert.equal(droppedTotal(a) + a.survived, a.candidatesGenerated);
+});
+
+test("v2 の『形』の理由は、理由ごとに数えられる", () => {
+  const a = tally([result(["person_verdict", "diagnosis", "advice"], false)]);
+  assert.equal(a.byReason?.person_verdict, 1);
+  assert.equal(a.byReason?.diagnosis, 1);
+  assert.equal(a.byReason?.advice, 1);
+  assert.equal(a.survived, 0);
 });
 
 test("Coverage は Open Bet が残ったセッションの割合", () => {

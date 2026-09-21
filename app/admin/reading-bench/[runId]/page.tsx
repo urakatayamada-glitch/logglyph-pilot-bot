@@ -19,11 +19,27 @@ export const dynamic = "force-dynamic";
 
 const DROP_LABELS: Record<string, string> = {
   grounding: "根拠が生ログに無い",
-  no_assertion: "言い切っていない",
+  no_gap: "事実同士の「間」が無い",
+  internal_id: "内部IDが混入",
+  gender_assertion: "性別を断定（彼・彼女）",
+  person_verdict: "人物評（〜な人・タイプ・傾向）",
+  diagnosis: "心理診断（防衛機制など）",
+  advice: "助言（〜が必要・サポート）",
+  no_assertion: "賭けていない（逃げ語だけ）",
   barnum_lexicon: "一般論の語",
   barnum_swap: "他人にも当てはまった",
   surprise_echo: "本人の発言の言い換え",
 };
+
+/** 表示順。Benchmark の3つの問いに沿って並べる */
+const REASON_GROUPS: Array<{ title: string; reasons: string[] }> = [
+  { title: "根拠", reasons: ["grounding"] },
+  {
+    title: "形（人物評・診断・助言ではなく、語りの中のズレか）",
+    reasons: ["no_gap", "person_verdict", "diagnosis", "advice", "gender_assertion", "internal_id", "no_assertion"],
+  },
+  { title: "一般論（誰にでも当てはまらないか）", reasons: ["barnum_lexicon", "barnum_swap", "surprise_echo"] },
+];
 
 export default async function RunResult({
   params,
@@ -93,8 +109,26 @@ export default async function RunResult({
         {String(run.engine_version)}　{String(run.model)}
       </p>
 
-      {/* ---------- 1. Coverage ---------- */}
-      <h2 style={{ fontSize: 14, marginTop: 28 }}>① Coverage（強い読みを出せた割合）</h2>
+      <p
+        style={{
+          color: "var(--ink)",
+          fontSize: 12,
+          lineHeight: 1.9,
+          padding: 12,
+          border: "1px solid var(--line)",
+          borderRadius: 8,
+        }}
+      >
+        これは <strong>AI Reading</strong> の検証です（Meaning Making の仮説）。
+        実在する他者による読み（#003 Human Interpretation）の代替ではなく、別の仮説として扱います。
+        <br />
+        <strong>通過率は成功条件ではありません。</strong>
+        見るのは次の3つを分けたうえでの組み合わせです：
+        ① 読みを作れるか ② それが人物評ではなく「語りの中のズレ」か ③ 本人に返したとき意味が動くか。
+      </p>
+
+      {/* ---------- 問い1 ---------- */}
+      <h2 style={{ fontSize: 14, marginTop: 28 }}>問い1：読みを作れるか（Coverage）</h2>
       <table className="admin-table">
         <tbody>
           <tr>
@@ -122,47 +156,80 @@ export default async function RunResult({
         </tbody>
       </table>
 
-      {/* ---------- 2. Attrition ---------- */}
-      <h2 style={{ fontSize: 14, marginTop: 28 }}>② どこで落ちたか（Candidate Attrition）</h2>
+      {/* ---------- 問い2 ---------- */}
+      <h2 style={{ fontSize: 14, marginTop: 28 }}>
+        問い2：人物評・診断・助言ではなく「語りの中のズレ」になっているか
+      </h2>
       <p style={{ color: "var(--ink)", fontSize: 12, lineHeight: 1.9 }}>
-        一般論を出すくらいなら棄却でよい。ただし
-        <strong>「出さないこと」で失敗を避けていないか</strong>をここで見る。
+        生成された候補 {a.candidatesGenerated ?? 0} 件が、どこで落ちたか。
+        一般論を出すくらいなら棄却でよい。ただし<strong>「出さないこと」で失敗を避けていないか</strong>もここで見る。
       </p>
-      <table className="admin-table">
-        <tbody>
-          <tr>
-            <td>生成された候補</td>
-            <td>{a.candidatesGenerated ?? 0}</td>
-          </tr>
-          <tr>
-            <td>根拠が生ログに無い</td>
-            <td>{a.droppedByGrounding ?? 0}</td>
-          </tr>
-          <tr>
-            <td>言い切っていない</td>
-            <td>{a.droppedByNoAssertion ?? 0}</td>
-          </tr>
-          <tr>
-            <td>一般論の語</td>
-            <td>{a.droppedByBarnumLexicon ?? 0}</td>
-          </tr>
-          <tr>
-            <td>他人にも当てはまった（差し替え）</td>
-            <td>{a.droppedByBarnumSwap ?? 0}</td>
-          </tr>
-          <tr>
-            <td>本人の発言の言い換え</td>
-            <td>{a.droppedBySurpriseEcho ?? 0}</td>
-          </tr>
-          <tr>
-            <td>検査を通った候補</td>
-            <td>{a.survived ?? 0}</td>
-          </tr>
-        </tbody>
-      </table>
+      {a.byReason ? (
+        <table className="admin-table">
+          <tbody>
+            {REASON_GROUPS.flatMap((g) => [
+              <tr key={g.title}>
+                <td colSpan={2}>
+                  <strong>{g.title}</strong>
+                </td>
+              </tr>,
+              ...g.reasons.map((r) => (
+                <tr key={r}>
+                  <td>　{DROP_LABELS[r]}</td>
+                  <td>{(a.byReason as Record<string, number>)[r] ?? 0}</td>
+                </tr>
+              )),
+            ])}
+            <tr>
+              <td>
+                <strong>検査を通った候補</strong>
+              </td>
+              <td>{a.survived ?? 0}</td>
+            </tr>
+          </tbody>
+        </table>
+      ) : (
+        <table className="admin-table">
+          <tbody>
+            <tr>
+              <td>根拠が生ログに無い</td>
+              <td>{a.droppedByGrounding ?? 0}</td>
+            </tr>
+            <tr>
+              <td>言い切っていない（v1 の判定）</td>
+              <td>{a.droppedByNoAssertion ?? 0}</td>
+            </tr>
+            <tr>
+              <td>一般論の語</td>
+              <td>{a.droppedByBarnumLexicon ?? 0}</td>
+            </tr>
+            <tr>
+              <td>他人にも当てはまった</td>
+              <td>{a.droppedByBarnumSwap ?? 0}</td>
+            </tr>
+            <tr>
+              <td>本人の発言の言い換え</td>
+              <td>{a.droppedBySurpriseEcho ?? 0}</td>
+            </tr>
+            <tr>
+              <td>検査を通った候補</td>
+              <td>{a.survived ?? 0}</td>
+            </tr>
+          </tbody>
+        </table>
+      )}
+
+      {/* ---------- 問い3 ---------- */}
+      <h2 style={{ fontSize: 14, marginTop: 28 }}>問い3：本人に返したとき、意味が動くか</h2>
+      <p style={{ color: "var(--ink)", fontSize: 12, lineHeight: 1.9 }}>
+        <strong>この画面ではまだ測っていません（Phase 3）。</strong>
+        下の Blind 評価（Phase 2）は「ログを知らない人が、読みとして成立していると判断できるか」までです。
+        本人の反応（自分ではそう見ていなかった／ちょっと考えたくなった／別の記憶を思い出した／で？）は、
+        通過した読みを本人に返す小さな実験で別に測ります。
+      </p>
 
       {/* ---------- 3. 質 ---------- */}
-      <h2 style={{ fontSize: 14, marginTop: 28 }}>③ Reading の質（Open Bet の平均）</h2>
+      <h2 style={{ fontSize: 14, marginTop: 28 }}>参考：Open Bet の4軸平均（LLM採点を含む）</h2>
       <table className="admin-table">
         <tbody>
           <tr>
@@ -184,12 +251,12 @@ export default async function RunResult({
         </tbody>
       </table>
 
-      {/* ---------- 4. Blind ---------- */}
-      <h2 style={{ fontSize: 14, marginTop: 28 }}>④ Blind 評価</h2>
+      {/* ---------- Blind ---------- */}
+      <h2 style={{ fontSize: 14, marginTop: 28 }}>Phase 2：Blind 評価</h2>
       {!blind.calibrationOk && (
         <p className="admin-error">
           ⚠ デコイを「一般論っぽい」と判定できた率が {pct(blind.decoyCaughtRate)} です。
-          80% 未満のあいだ、①の数字は読まないでください。評価そのものが成立していません。
+          80% 未満のあいだ、「刺さった率」は読まないでください。評価そのものが成立していません。
         </p>
       )}
       <table className="admin-table">
@@ -244,6 +311,18 @@ export default async function RunResult({
           {r.openBet ? (
             <div style={{ marginTop: 10 }}>
               <strong>OPEN BET</strong>
+              {r.openBet.candidate.gap && (
+                <div className="admin-sub" style={{ color: "var(--ink)" }}>
+                  見たズレ：{r.openBet.candidate.gap}
+                  {r.openBet.candidate.anchorA && (
+                    <>
+                      <br />「{r.openBet.candidate.anchorA}」
+                      {r.openBet.candidate.anchorASource === "trigger" ? "（振った話）" : ""}
+                      {" ↔ "}「{r.openBet.candidate.anchorB}」
+                    </>
+                  )}
+                </div>
+              )}
               <p>{r.openBet.candidate.text}</p>
               <div className="admin-sub">
                 Evidence {r.openBet.score!.evidence} / Specificity {r.openBet.score!.specificity} /

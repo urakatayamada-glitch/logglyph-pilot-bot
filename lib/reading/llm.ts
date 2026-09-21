@@ -13,7 +13,7 @@ import type { Candidate, ReadingInput, Signal, SignalKind } from "./types.ts";
  *   同じコンテキストで「これ良いよね」まで判断させると自己採点になる。
  */
 
-export const READING_ENGINE_VERSION = "reading-v1";
+export const READING_ENGINE_VERSION = "reading-v2";
 
 /** 本人の発話だけを「相手:」で、AIの発話を「AI:」で並べる */
 export function transcriptOf(input: ReadingInput): string {
@@ -124,24 +124,55 @@ export async function extractSignals(input: ReadingInput): Promise<Signal[]> {
    ============================================================ */
 
 /*
- * ⚠ ここで「良い Reading を書いて」と頼まない。
- *   3件出させて、**選ぶのは後段の機械検査**にする。
- *   生成側に品質判断をさせないことが、自己採点を避ける第一歩になる。
+ * ⚠ reading-v2 で全面的に書き直した。
+ *
+ *   v1 が書いていたのは Reading ではなく**人物評**だった
+ *   （「感受性豊かな人である」「防衛機制の一環である」「サポートが必要である」）。
+ *   同じ会話から、手書きでは「忘れていた、と言ったけれど、いまそれを話している」が書けた。
+ *   **材料は同じで、読み方が違った。** 手書きは人ではなく「ズレ」を読んでいた。
+ *
+ *   Reading の定義（Product Owner / 2026-09-21）：
+ *     人を説明するものではなく、語られた事実同士の間にある
+ *     「まだ名前のない関係」を提示するもの。
+ *     正解を言い当てる必要はない。本人の記憶の意味が動くことのほうが重要。
+ *
+ *   だから「どこを見たか」を**2つの事実の組**として欄で出させる（anchor_a / anchor_b）。
+ *   欄にしておけば、ズレが無い読みは機械で落とせる。
+ *
+ * ⚠ 例は、Benchmark に含まれる会話から取らない（その回答がそのまま出てくるため）。
  */
-const CANDIDATE_SYSTEM = `あなたは、1回の会話から拾った手がかりをもとに、
-その人について**踏み込んだ読み**を書く。
+const CANDIDATE_SYSTEM = `あなたは、1回の会話を読んで、語られた事実同士の間にある
+「まだ名前のない関係」を1つ見つけ、そこに賭ける文章を書く。
 
-読みの書き方：
-- 200〜400字
-- **必ず言い切る。**「〜と思う」「〜なんじゃないか」で終える
-- 「かもしれません」「〜な気がします」で逃げない
-- 根拠にした手がかりの id を based_on に入れる（最低1つ）
-- 本人が言っていない具体的な事実を勝手に足さない
-- 分からない部分は「分からない」と書いてよい。埋めない
+これは性格診断ではない。**人を説明しない。** 事実と事実の間を指す。
 
-⚠ 3件は**別々の方向**にすること。同じ読みの言い換えを3つ出さない。
-⚠ 本人が言ったことの要約は読みではない。**本人が言っていないことを言う。**
-⚠ 誰にでも当てはまる文章は書かない。この人にしか当てはまらないものを書く。`;
+書き方（この順番）：
+1. どこを見たかを言う
+   - 「こちらが振った話」と「返ってきた話」のズレ
+   - または「本人が言ったこと」と「本人が言ったほかのこと」のズレ
+     （例：大したことないと言いながら、細部まで覚えている／
+           やめたと言いながら、話すときは現在形になっている）
+2. そのズレを、本人の言葉を使って名指す
+3. そのズレの理由に賭ける。1つだけ。言い切る
+
+出力する欄：
+- anchor_a_source : ズレの片側が「こちらが振った話」なら "trigger"、本人の発言なら "person"
+- anchor_a        : ズレの片側。本人の発言なら一字一句そのまま引用。trigger なら振った話から一字一句そのまま引用
+- anchor_b        : ズレのもう片側。本人の発言から一字一句そのまま引用（anchor_a とは別の箇所）
+- gap             : 2つの間のズレを1行で
+- text            : 本人に向けて書く本文（120〜300字）
+- based_on        : 根拠にした手がかりの id
+
+絶対に書かないもの：
+- 「あなたは〜な人だ」「〜なタイプ」「〜な傾向がある」「性格」「感受性」など、人を形容で要約する文
+- 心理学の用語（防衛機制・承認欲求・無意識・トラウマ など）
+- 助言（「〜が必要」「サポート」「〜するとよい」「〜べき」）
+- 「彼」「彼女」。本人には「あなた」で話しかける。主語を置かなくてもよい
+- 手がかりの id（s1, s2 など）を本文に書かない
+- 本人が言っていない具体的な事実
+
+⚠ 「かもしれません」で逃げない。当たらなくてよい。**意味が動く賭け**を書く。
+⚠ 3件は、それぞれ**別のズレ**を見ること。`;
 
 const CANDIDATE_SCHEMA = {
   type: "object",
@@ -153,8 +184,12 @@ const CANDIDATE_SCHEMA = {
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["text", "based_on"],
+        required: ["anchor_a_source", "anchor_a", "anchor_b", "gap", "text", "based_on"],
         properties: {
+          anchor_a_source: { type: "string", enum: ["trigger", "person"] },
+          anchor_a: { type: "string" },
+          anchor_b: { type: "string" },
+          gap: { type: "string" },
           text: { type: "string" },
           based_on: { type: "array", items: { type: "string" } },
         },
@@ -186,7 +221,7 @@ export async function generateCandidates(
           "【拾った手がかり】",
           signalBlock,
           "",
-          `方向の違う読みを ${CANDIDATE_COUNT} 件。`,
+          `別々のズレを見た読みを ${CANDIDATE_COUNT} 件。`,
         ].join("\n"),
       },
     ],
@@ -198,7 +233,14 @@ export async function generateCandidates(
   const raw = res.choices[0]?.message?.content;
   if (!raw) return [];
   const parsed = JSON.parse(raw) as {
-    candidates?: Array<{ text: string; based_on: string[] }>;
+    candidates?: Array<{
+      text: string;
+      based_on: string[];
+      anchor_a_source?: string;
+      anchor_a?: string;
+      anchor_b?: string;
+      gap?: string;
+    }>;
   };
   const list = Array.isArray(parsed.candidates) ? parsed.candidates : [];
   return list
@@ -208,6 +250,10 @@ export async function generateCandidates(
       id: `c${i + 1}`,
       text: c.text.trim(),
       basedOn: Array.isArray(c.based_on) ? c.based_on.filter((x) => typeof x === "string") : [],
+      anchorA: String(c.anchor_a ?? "").trim(),
+      anchorASource: c.anchor_a_source === "trigger" ? "trigger" : "person",
+      anchorB: String(c.anchor_b ?? "").trim(),
+      gap: String(c.gap ?? "").trim(),
     }));
 }
 
@@ -223,13 +269,13 @@ export async function generateCandidates(
 const SWAP_SYSTEM = `ある人の会話の全文と、ある文章が渡される。
 
 質問はひとつだけ：
-**この文章は、この人について書かれたものだと思うか。**
+**この文章は、この会話をした人について書かれたものだと思うか。**
 
 判断の基準：
-- この人の会話に出てくる具体的な事柄と噛み合っているなら yes
-- 誰について書かれていても成立しそうなら no ではなく yes にしない。
-  つまり「誰にでも当てはまるから、この人にも当てはまる」は yes にしない
-- あくまで「この人のことだ」と言えるかどうかで答える`;
+- 文章が、この会話に実際に出てきた具体的な事柄（出来事・物・言葉）を指していて、
+  それが噛み合っているなら fits = true
+- 文章が指している事柄が、この会話に出てこないなら fits = false
+- 「誰にでも当てはまるから、この人にも当てはまる」は fits = true にしない`
 
 const SWAP_SCHEMA = {
   type: "object",
